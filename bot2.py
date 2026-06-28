@@ -6,7 +6,7 @@ from flask import Flask
 
 # === НАСТРОЙКИ ===
 # Замените токен на ваш собственный из @BotFather или используйте переменные окружения
-TOKEN = os.environ.get('BOT_TOKEN', '8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM')
+TOKEN = os.environ.get('8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM', '8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM')
 BUG_CHANNEL_ID = -1000000000000  # ID канала для багов (обязательно должен начинаться с -100)
 
 # ТОЛЬКО ДВА МОДЕРАТОРА с полным доступом к админ-панели
