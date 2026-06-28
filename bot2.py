@@ -7,7 +7,7 @@ from telebot import types
 from flask import Flask
 
 # === НАЛАШТУВАННЯ ===
-TOKEN = os.environ.get('8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM', '8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApMТ')
+TOKEN = os.environ.get('8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM', '8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM')
 BUG_CHANNEL_ID = -1000000000000 # Заміни на ID вашого технічного каналу
 
 # Головні адміністратори (юзернейми без @, обов'язково маленькими літерами)
