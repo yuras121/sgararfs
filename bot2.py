@@ -1,93 +1,128 @@
 import os
+import json
 import threading
 import telebot
 from telebot import types
 from flask import Flask
 
-# === НАСТРОЙКИ ===
-# Замените токен на ваш собственный из @BotFather или используйте переменные окружения
+# === НАЛАШТУВАННЯ ===
 TOKEN = os.environ.get('8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM', '8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM')
-BUG_CHANNEL_ID = -1000000000000  # ID канала для багов (обязательно должен начинаться с -100)
+BUG_CHANNEL_ID = -1000000000000 # Заміни на ID вашого каналу
 
-# ТОЛЬКО ДВА МОДЕРАТОРА с полным доступом к админ-панели
+# Головні адміністратори (юзернейми без @, обов'язково маленькими літерами)
 ADMIN_USERNAMES = ['p1vi_k', 'dragwayder']
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 
-# База данных в оперативной памяти (для хранения активных тикетов)
-tickets = [] 
+# === СИСТЕМА ЗБЕРЕЖЕННЯ (БАЗА ДАНИХ) ===
+DATA_FILE = 'tickets.json'
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+def save_data():
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(tickets, f, ensure_ascii=False, indent=4)
+
+tickets = load_data()
 user_states = {}
 admin_view_index = {}
 
-# === ГОЛОВНОЕ МЕНЮ (ДЛЯ ПОЛЬЗОВАТЕЛЕЙ) ===
+# === КОРИСТУВАЦЬКИЙ ІНТЕРФЕЙС ===
 
 def get_start_kb():
     markup = types.InlineKeyboardMarkup(row_width=1)
-    btn_urgent = types.InlineKeyboardButton("🚨 Экстренная связь / ЧП", callback_data="type_urgent")
-    btn_collab = types.InlineKeyboardButton("🤝 Предложения и сотрудничество", callback_data="type_collab")
-    btn_bug = types.InlineKeyboardButton("🐛 Сообщить о баге (в канал)", callback_data="type_bug")
-    markup.add(btn_urgent, btn_collab, btn_bug)
+    markup.add(
+        types.InlineKeyboardButton("🚨 Экстренная связь / ЧП", callback_data="type_urgent"),
+        types.InlineKeyboardButton("🤝 Предложения и сотрудничество", callback_data="type_collab"),
+        types.InlineKeyboardButton("🐛 Сообщить о баге (в канал)", callback_data="type_bug"),
+        types.InlineKeyboardButton("📋 Мои обращения", callback_data="my_tickets")
+    )
+    return markup
+
+def get_cancel_kb():
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❌ Отменить", callback_data="cancel_action"))
     return markup
 
 @bot.message_handler(commands=['start'])
 def start_command(message):
     text = (
-        "Здравствуйте! Вы обратились в официальную службу поддержки **DragPolit**.\n\n"
-        "Пожалуйста, выберите нужный раздел меню. Обратите внимание, что ложные вызовы по экстренным каналам связи могут привести к блокировке."
+        "<b>Официальная служба поддержки DragPolit</b>\n\n"
+        "Выберите необходимый раздел меню. Обратите внимание, что спам и ложные вызовы могут привести к блокировке."
     )
-    bot.send_message(message.chat.id, text, reply_markup=get_start_kb(), parse_mode='Markdown')
-    if message.chat.id in user_states:
-        del user_states[message.chat.id]
+    bot.send_message(message.chat.id, text, reply_markup=get_start_kb())
+    user_states.pop(message.chat.id, None)
+
+@bot.message_handler(commands=['me'])
+def debug_command(message):
+    username = message.from_user.username
+    status = "✅ Главный Администратор" if username and username.lower() in ADMIN_USERNAMES else "👤 Пользователь"
+    text = (
+        f"🖥 <b>Системная диагностика:</b>\n\n"
+        f"<b>ID:</b> <code>{message.chat.id}</code>\n"
+        f"<b>Username:</b> @{username}\n"
+        f"<b>Статус доступа:</b> {status}"
+    )
+    bot.send_message(message.chat.id, text)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'cancel_action')
+def cancel_action(call):
+    user_states.pop(call.message.chat.id, None)
+    bot.edit_message_text("Действие отменено. Возврат в главное меню.", call.message.chat.id, call.message.message_id, reply_markup=get_start_kb())
+
+@bot.callback_query_handler(func=lambda call: call.data == 'my_tickets')
+def show_my_tickets(call):
+    my_t = [t for t in tickets if t['user_id'] == call.message.chat.id]
+    if not my_t:
+        bot.answer_callback_query(call.id, "У вас пока нет обращений.", show_alert=True)
+        return
+    
+    text = "📋 <b>Ваши последние обращения:</b>\n\n"
+    for t in my_t[-5:]: # Показуємо останні 5
+        status_icon = "🟢" if t['status'] == 'Открыт' else "🔴"
+        text += f"{status_icon} <b>№{t['id']}</b> ({t['category']}) — {t['status']}\n"
+    
+    markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'back_to_main')
+def back_main(call):
+    text = "<b>Официальная служба поддержки DragPolit</b>\n\nВыберите необходимый раздел меню."
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_start_kb())
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('type_'))
 def handle_main_menu(call):
     action = call.data.split('_')[1]
     
     if action == 'bug':
-        text = (
-            "🛠 **Сообщение об ошибке (Баг-репорт)**\n\n"
-            "Чтобы технический отдел смог быстро решить проблему, пожалуйста, напишите **одно сообщение** по следующему шаблону:\n\n"
-            "1️⃣ **Суть проблемы:** (Кратко, что именно сломалось)\n"
-            "2️⃣ **Где произошла ошибка:** (В боте, в игре, в чате)\n"
-            "3️⃣ **Как повторить:** (Какие кнопки вы нажали до появления ошибки)\n\n"
-            "_Вы также можете прикрепить скриншот или видео к этому сообщению._\n"
-            "Ваша информация будет напрямую перенаправлена разработчикам в технический канал."
-        )
-        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+        text = "🛠 <b>Баг-репорт</b>\nОпишите проблему одним сообщением:\n1. Что сломалось?\n2. Где?\n3. Как повторить?\n\n<i>Отправляется напрямую в тех. отдел.</i>"
         user_states[call.message.chat.id] = {'state': 'waiting_bug'}
-        
     elif action == 'urgent':
-        text = "🚨 **Экстренная связь (ЧП)**\n\nПожалуйста, опишите вашу проблему максимально подробно в следующем сообщении. Руководство рассмотрит это обращение в приоритетном порядке."
-        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+        text = "🚨 <b>Экстренная связь (ЧП)</b>\nПодробно опишите проблему. Руководство рассмотрит ее вне очереди."
         user_states[call.message.chat.id] = {'state': 'waiting_ticket', 'category': 'ЧП / Срочно'}
-        
     elif action == 'collab':
-        text = "🤝 **Предложения и сотрудничество**\n\nОпишите вашу идею или коммерческое предложение в следующем сообщении. Мы открыты к диалогу и конструктивным предложениям."
-        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+        text = "🤝 <b>Сотрудничество</b>\nОпишите ваше коммерческое предложение или идею."
         user_states[call.message.chat.id] = {'state': 'waiting_ticket', 'category': 'Сотрудничество'}
         
-    bot.answer_callback_query(call.id)
-
-# === ОБРАБОТКА ВХОДЯЩИХ СООБЩЕНИЙ ОТ ПОЛЬЗОВАТЕЛЕЙ ===
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
 
 @bot.message_handler(func=lambda message: message.chat.id in user_states, content_types=['text', 'photo', 'video', 'document'])
 def handle_user_input(message):
     user_data = user_states.pop(message.chat.id)
-    username = f"@{message.from_user.username}" if message.from_user.username else "Анонимный пользователь"
+    username = f"@{message.from_user.username}" if message.from_user.username else "Анонимный"
     
     if user_data['state'] == 'waiting_bug':
-        # Отправляем напрямую в технический канал, тикет в панели не создаем
-        bot.send_message(BUG_CHANNEL_ID, f"⚠️ **Новый баг-репорт от {username}** (ID: `{message.chat.id}`):\n", parse_mode='Markdown')
+        bot.send_message(BUG_CHANNEL_ID, f"⚠️ <b>Новый баг-репорт от {username}</b> (ID: <code>{message.chat.id}</code>):\n")
         bot.copy_message(BUG_CHANNEL_ID, message.chat.id, message.message_id)
-        
-        bot.send_message(message.chat.id, "✅ Ваш баг-репорт успешно отправлен в технический канал. Спасибо за помощь в улучшении проекта!", reply_markup=get_start_kb())
+        bot.send_message(message.chat.id, "✅ Баг-репорт отправлен разработчикам.", reply_markup=get_start_kb())
         
     elif user_data['state'] == 'waiting_ticket':
-        # Создаем тикет для ЧП или Сотрудничества
         ticket_id = len(tickets) + 1
-        
-        # Захватываем текст сообщения или описание к медиафайлу
-        ticket_text = message.text if message.text else (message.caption if message.caption else "[Медиафайл без текста]")
+        ticket_text = message.text if message.text else (message.caption if message.caption else "[Медиафайл]")
         
         new_ticket = {
             'id': ticket_id,
@@ -97,50 +132,47 @@ def handle_user_input(message):
             'text': ticket_text,
             'status': 'Открыт'
         }
-
         tickets.append(new_ticket)
-        bot.send_message(message.chat.id, f"✅ Ваше обращение №{ticket_id} зарегистрировано. Ожидайте официального ответа от руководства.", reply_markup=get_start_kb())
+        save_data() # Зберігаємо в JSON
+        bot.send_message(message.chat.id, f"✅ Обращение <b>№{ticket_id}</b> зарегистрировано.", reply_markup=get_start_kb())
 
-# === ЗАКРЫТАЯ АДМИН-ПАНЕЛЬ (УПРАВЛЕНИЕ КНОПКАМИ СЛОВАМИ ТУДА-СЮДА) ===
+# === АДМІН-ПАНЕЛЬ ===
+
+def is_admin(username):
+    return username and username.lower() in ADMIN_USERNAMES
 
 def get_admin_ticket_kb(ticket_id, current_index, total_tickets):
     markup = types.InlineKeyboardMarkup(row_width=3)
-    btn_prev = types.InlineKeyboardButton("⬅️ Назад", callback_data=f"nav_prev_{current_index}")
-    btn_count = types.InlineKeyboardButton(f"{current_index + 1} / {total_tickets}", callback_data="ignore")
-    btn_next = types.InlineKeyboardButton("Вперед ➡️", callback_data=f"nav_next_{current_index}")
-    btn_reply = types.InlineKeyboardButton("💬 Ответить", callback_data=f"admin_reply_{ticket_id}")
-    btn_close = types.InlineKeyboardButton("❌ Решено (Закрыть)", callback_data=f"admin_close_{ticket_id}")
-    markup.add(btn_prev, btn_count, btn_next)
-    markup.add(btn_reply)
-    markup.add(btn_close)
+    markup.add(
+        types.InlineKeyboardButton("⬅️", callback_data=f"nav_prev_{current_index}"),
+        types.InlineKeyboardButton(f"{current_index + 1} / {total_tickets}", callback_data="ignore"),
+        types.InlineKeyboardButton("➡️", callback_data=f"nav_next_{current_index}")
+    )
+    markup.add(
+        types.InlineKeyboardButton("💬 Ответить", callback_data=f"admin_reply_{ticket_id}"),
+        types.InlineKeyboardButton("❌ Закрыть (Решено)", callback_data=f"admin_close_{ticket_id}")
+    )
     return markup
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
-    if message.from_user.username not in ADMIN_USERNAMES:
-        bot.send_message(message.chat.id, "⛔ Доступ запрещен. Вы не являетесь главным администратором.")
-        return
+    if not is_admin(message.from_user.username):
+        return bot.send_message(message.chat.id, "⛔ Доступ запрещен.")
         
     open_tickets = [t for t in tickets if t['status'] == 'Открыт']
     if not open_tickets:
-        bot.send_message(message.chat.id, "📭 Актуальных обращений (ЧП/Сотрудничество) на данный момент нет.")
-        return
+        return bot.send_message(message.chat.id, "📭 Актуальных обращений нет.")
         
-    admin_view_index[message.chat.id] = 0
     send_ticket_view(message.chat.id, 0, open_tickets)
 
 def send_ticket_view(chat_id, index, open_tickets, message_id=None):
-    if index >= len(open_tickets):
-        index = 0
-    elif index < 0:
-        index = len(open_tickets) - 1
-        
+    index = index % len(open_tickets) # Безкінечна прокрутка
     ticket = open_tickets[index]
     emoji = "🚨" if ticket['category'] == 'ЧП / Срочно' else "🤝"
     
     text = (
-        f"{emoji} **Тикет №{ticket['id']}** | {ticket['category']}\n"
-        f"👤 От: {ticket['username']} (ID: `{ticket['user_id']}`)\n"
+        f"{emoji} <b>Тикет №{ticket['id']}</b> | {ticket['category']}\n"
+        f"👤 От: {ticket['username']} (<code>{ticket['user_id']}</code>)\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"{ticket['text']}\n"
         f"━━━━━━━━━━━━━━━━━━"
@@ -148,116 +180,86 @@ def send_ticket_view(chat_id, index, open_tickets, message_id=None):
     kb = get_admin_ticket_kb(ticket['id'], index, len(open_tickets))
     
     if message_id:
-        try:
-            bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode='Markdown')
-        except Exception:
-            # На случай, если текст сообщения не изменился, чтобы избежать ошибки Telegram API
-            pass
+        try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb)
+        except: pass
     else:
-        bot.send_message(chat_id, text, reply_markup=kb, parse_mode='Markdown')
+        bot.send_message(chat_id, text, reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('nav_') or call.data == 'ignore')
+@bot.callback_query_handler(func=lambda call: call.data.startswith('nav_'))
 def handle_pagination(call):
-    if call.data == 'ignore':
-        bot.answer_callback_query(call.id)
-        return
-        
-    if call.from_user.username not in ADMIN_USERNAMES:
-        bot.answer_callback_query(call.id, "⛔ У вас нет доступа к управлению.", show_alert=True)
-        return
-        
+    if not is_admin(call.from_user.username): return bot.answer_callback_query(call.id, "⛔ Отказано", show_alert=True)
+    
     open_tickets = [t for t in tickets if t['status'] == 'Открыт']
-    if not open_tickets:
-        bot.edit_message_text("📭 Все обращения успешно закрыты.", call.message.chat.id, call.message.message_id)
-        bot.answer_callback_query(call.id)
-        return
+    if not open_tickets: return bot.edit_message_text("📭 Все обращения закрыты.", call.message.chat.id, call.message.message_id)
 
     action, index_str = call.data.replace('nav_', '').split('_')
-    current_index = int(index_str)
-    
-    if action == 'next':
-        new_index = (current_index + 1) % len(open_tickets)
-    else:
-        new_index = (current_index - 1) % len(open_tickets)
-        
-    admin_view_index[call.message.chat.id] = new_index
+    new_index = int(index_str) + 1 if action == 'next' else int(index_str) - 1
     send_ticket_view(call.message.chat.id, new_index, open_tickets, call.message.message_id)
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_close_'))
 def handle_close_ticket(call):
-    if call.from_user.username not in ADMIN_USERNAMES:
-        return bot.answer_callback_query(call.id)
-        
+    if not is_admin(call.from_user.username): return
+    
     ticket_id = int(call.data.split('_')[2])
     for t in tickets:
         if t['id'] == ticket_id:
             t['status'] = 'Закрыт'
-            try:
-                bot.send_message(t['user_id'], f"🔔 Вопрос по вашему обращению №{ticket_id} был успешно решен руководством. Спасибо за обратную связь!")
-            except Exception:
-                pass
+            save_data()
+            try: bot.send_message(t['user_id'], f"🔔 Ваш тикет <b>№{ticket_id}</b> закрыт руководством.")
+            except: pass
             break
             
-    bot.answer_callback_query(call.id, "Обращение закрыто!")
+    bot.answer_callback_query(call.id, "Тикет закрыт!")
     
     open_tickets = [t for t in tickets if t['status'] == 'Открыт']
-    if open_tickets:
-        send_ticket_view(call.message.chat.id, 0, open_tickets, call.message.message_id)
-    else:
-        bot.edit_message_text("📭 Все обращения успешно обработаны и закрыты.", call.message.chat.id, call.message.message_id)
+    if open_tickets: send_ticket_view(call.message.chat.id, 0, open_tickets, call.message.message_id)
+    else: bot.edit_message_text("📭 Все обращения обработаны.", call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_reply_'))
 def handle_reply_ticket(call):
-    if call.from_user.username not in ADMIN_USERNAMES:
-        return bot.answer_callback_query(call.id)
-        
+    if not is_admin(call.from_user.username): return
+    
     ticket_id = int(call.data.split('_')[2])
     user_id = next((t['user_id'] for t in tickets if t['id'] == ticket_id), None)
-            
-    if not user_id:
-        return bot.answer_callback_query(call.id, "Ошибка: пользователь не найден.")
-        
-    msg = bot.send_message(call.message.chat.id, f"✍️ Введите текст официального ответа для тикета №{ticket_id}:\n_(Для отмены напишите слово 'отмена')_", parse_mode='Markdown')
-    user_states[call.message.chat.id] = {'state': 'writing_reply', 'user_id': user_id, 'ticket_id': ticket_id}
+    
+    msg = bot.send_message(call.message.chat.id, f"✍️ Напишите ответ (Тикет №{ticket_id}):", reply_markup=get_cancel_kb())
+    user_states[call.message.chat.id] = {'state': 'writing_reply', 'user_id': user_id, 'ticket_id': ticket_id, 'msg_id': msg.message_id}
     bot.answer_callback_query(call.id)
 
 @bot.message_handler(func=lambda message: message.chat.id in user_states and user_states[message.chat.id].get('state') == 'writing_reply')
 def send_admin_reply(message):
     state_data = user_states.pop(message.chat.id)
     
-    if message.text and message.text.lower() == 'отмена':
-        return bot.send_message(message.chat.id, "❌ Отправка ответа отменена. Используйте /admin для возврата в панель управления.")
-        
+    # Видаляємо кнопку скасування попереднього повідомлення для краси
+    try: bot.edit_message_reply_markup(message.chat.id, state_data['msg_id'], reply_markup=None)
+    except: pass
+
     official_reply = (
-        f"🛡 **Официальный ответ руководства DragPolit**\n"
-        f"По вашему обращению №{state_data['ticket_id']}:\n\n"
-        f"_{message.text}_"
+        f"🛡 <b>Ответ руководства DragPolit</b>\n"
+        f"По обращению №{state_data['ticket_id']}:\n\n"
+        f"<i>{message.text}</i>"
     )
     
     try:
-        bot.send_message(state_data['user_id'], official_reply, parse_mode='Markdown')
-        bot.send_message(message.chat.id, "✅ Официальный ответ успешно отправлен пользователю! Введите /admin для продолжения работы.")
-    except Exception:
-        bot.send_message(message.chat.id, "⚠️ Ошибка отправки. Возможно, пользователь заблокировал бота или остановил его.")
+        bot.send_message(state_data['user_id'], official_reply)
+        bot.send_message(message.chat.id, "✅ Ответ отправлен. Введите /admin")
+    except:
+        bot.send_message(message.chat.id, "⚠️ Ошибка. Пользователь заблокировал бота.")
 
-# === ФИКТИВНЫЙ ВЕБ-СЕРВЕР ДЛЯ ХОСТИНГА (RENDER KEEP-ALIVE) ===
+# === РЕНДЕР СЕРВЕР ТА ЗАПУСК ===
 app = Flask(__name__)
 
 @app.route('/')
 def keep_alive():
-    return "DragPolit Support Bot is fully operational and running!"
+    return "DragPolit System Core Active."
 
 def run_web_server():
-    # Render автоматически подставляет порт в переменную PORT
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == '__main__':
-    # Запуск веб-сервера в отдельном потоке, чтобы Render не отключал бота
-    print("Инициализация веб-сервера для платформы Render...")
     threading.Thread(target=run_web_server).start()
-    
-    # Запуск основного процесса бота
-    print("Официальный бот поддержки DragPolit успешно запущен...")
+    bot.remove_webhook()
+    print("DragPolit Bot Online...")
     bot.infinity_polling()
