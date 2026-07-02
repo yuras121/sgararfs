@@ -10,9 +10,9 @@ from datetime import datetime
 
 # === НАЛАШТУВАННЯ ===
 TOKEN = os.environ.get('TOKEN', '8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM')
-ADMIN_GROUP_ID = "-1614259542" 
 
 # ID ВЛАСНИКІВ (@dragwayder та @p1vi_k)
+# Бот буде працювати ТІЛЬКИ з цими ЛС, без жодних груп.
 OWNERS = [1614259542, 7716987740] 
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
@@ -24,10 +24,8 @@ DB_FILE = 'dragpolit.db'
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Таблиця користувачів
     c.execute('''CREATE TABLE IF NOT EXISTS users 
                  (user_id INTEGER PRIMARY KEY, username TEXT, is_banned INTEGER DEFAULT 0, join_date TEXT)''')
-    # Таблиця статистики (загальної)
     c.execute('''CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER)''')
     c.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('total_tickets', 0)")
     conn.commit()
@@ -126,7 +124,6 @@ def start_command(message):
     user_id = message.chat.id
     username = f"@{message.from_user.username}" if message.from_user.username else "Анонимный"
     
-    # Реєстрація та перевірка на новенького
     is_new = add_user(user_id, username)
     if is_new:
         for owner in OWNERS:
@@ -192,12 +189,10 @@ def handle_main_menu(call):
 
     action = call.data.split('_')[1]
     
-    # Інтерактивна анкета для адмінів
     if action == 'apply':
         user_states[call.message.chat.id] = {'state': 'apply_step_1', 'answers': {}}
         return bot.edit_message_text("📝 <b>Шаг 1 из 3:</b>\nНапишите ваше Имя и Возраст (например: Иван, 16):", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
 
-    # Звичайні тікети
     if action == 'bug':
         text = "🛠 <b>Баг-репорт</b>\nОпишите проблему:\n1. Что сломалось?\n2. Где?\n3. Как повторить?"
         category = "Баг-репорт"
@@ -263,7 +258,8 @@ def handle_user_input(message):
             username = f"@{message.from_user.username}" if message.from_user.username else "Анонимный"
             app_text = f"📝 <b>НОВАЯ ЗАЯВКА В АДМИНЫ</b>\n👤 От: {username}\n🔑 ID: <code>{message.chat.id}</code>\n━━━━━━━━━━━━━━━━━━\n<b>1. Имя/Возраст:</b> {answers['name_age']}\n<b>2. Опыт:</b> {answers['experience']}\n<b>3. Онлайн:</b> {message.text}"
             
-            for target in list(OWNERS) + [ADMIN_GROUP_ID]:
+            # Відправка ТІЛЬКИ власникам в ЛС
+            for target in OWNERS:
                 try: bot.send_message(target, app_text)
                 except: pass
             
@@ -277,7 +273,8 @@ def handle_user_input(message):
         username = f"@{message.from_user.username}" if message.from_user.username else "Анонимный"
         header = f"📌 <b>{category}</b>\n👤 От: {username}\n🔑 ID: <code>{message.chat.id}</code>\n━━━━━━━━━━━━━━━━━━"
         
-        for target in list(OWNERS) + [ADMIN_GROUP_ID]:
+        # Відправка ТІЛЬКИ власникам в ЛС
+        for target in OWNERS:
             try:
                 if message.content_type == 'text':
                     bot.send_message(target, f"{header}\n{message.text.replace('<', '&lt;').replace('>', '&gt;')}")
@@ -290,8 +287,8 @@ def handle_user_input(message):
         bot.send_message(message.chat.id, "✅ Ваше обращение отправлено. Руководство скоро вам ответит.", reply_markup=get_start_kb())
 
 
-# === ВІДПОВІДІ КЕРІВНИЦТВА (REPLY В ЛС ТА ГРУПІ) ===
-@bot.message_handler(func=lambda message: (str(message.chat.id) == str(ADMIN_GROUP_ID) or message.chat.id in OWNERS) and message.reply_to_message is not None)
+# === ВІДПОВІДІ КЕРІВНИЦТВА ТІЛЬКИ З ЛС ===
+@bot.message_handler(func=lambda message: message.chat.id in OWNERS and message.reply_to_message is not None)
 def handle_admin_reply(message):
     if message.reply_to_message.from_user.id != bot.get_me().id:
         return
@@ -322,12 +319,13 @@ def run_web_server():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 def start_bot():
+    # Очищаємо завислі запити, щоб уникнути конфлікту 409
     try: bot.delete_webhook(drop_pending_updates=True)
     except: pass
 
     while True:
         try:
-            print("Бот DragPolit підключений до серверів Telegram...")
+            print("Бот DragPolit підключений до серверів Telegram (Тільки ЛС)...")
             bot.infinity_polling(timeout=10, long_polling_timeout=5, none_stop=True)
         except telebot.apihelper.ApiTelegramException as e:
             if e.error_code == 409:
