@@ -12,7 +12,7 @@ TOKEN = os.environ.get('8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM', '825258
 
 # ЗАМІНИ ЦЕ НА ID ВАШОЇ АДМІНСЬКОЇ ГРУПИ (починається з мінуса, наприклад -1001234567890)
 # Додайте бота в цю групу і дайте йому права адміністратора!
-ADMIN_GROUP_ID = -1000000000000 
+ADMIN_GROUP_ID = -1614259542 
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 
@@ -157,6 +157,13 @@ def start_bot():
         except Exception as e:
             print(f"Збій з'єднання з Telegram API: {e}. Перезапуск через 10 секунд...")
             time.sleep(10)
+
+
+@bot.message_handler(commands=['get_id'])
+def get_id_command(message):
+    bot.reply_to(message, f"ID цього чату: <code>{message.chat.id}</code>")
+
+
 
 if __name__ == '__main__':
     threading.Thread(target=run_web_server).start()
