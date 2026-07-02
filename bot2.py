@@ -2,51 +2,106 @@ import os
 import time
 import threading
 import re
-import json
+import sqlite3
 import telebot
 from telebot import types
 from flask import Flask
+from datetime import datetime
 
 # === НАЛАШТУВАННЯ ===
 TOKEN = os.environ.get('TOKEN', '8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM')
-
 ADMIN_GROUP_ID = "-1614259542" 
 
-# ВПИШІТЬ СЮДИ ЦИФРОВІ ID ВЛАСНИКІВ (@dragwayder та @p1vi_k)
-# Їх можна дізнатися, якщо кожен з власників напише боту команду /get_id
-OWNERS = [1614259542,  7716987740] 
+# ID ВЛАСНИКІВ (@dragwayder та @p1vi_k)
+OWNERS = [1614259542, 7716987740] 
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
-
 user_states = {}
 
-# === БАЗА ДАНИХ КОРИСТУВАЧІВ (ДЛЯ РОЗСИЛКИ) ===
-USERS_FILE = 'users.json'
+# === БАЗА ДАНИХ (SQLite) ===
+DB_FILE = 'dragpolit.db'
 
-def load_users():
-    if os.path.exists(USERS_FILE):
-        try:
-            with open(USERS_FILE, 'r') as f:
-                return set(json.load(f))
-        except:
-            return set()
-    return set()
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Таблиця користувачів
+    c.execute('''CREATE TABLE IF NOT EXISTS users 
+                 (user_id INTEGER PRIMARY KEY, username TEXT, is_banned INTEGER DEFAULT 0, join_date TEXT)''')
+    # Таблиця статистики (загальної)
+    c.execute('''CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER)''')
+    c.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('total_tickets', 0)")
+    conn.commit()
+    conn.close()
 
-def save_user(user_id):
-    users = load_users()
-    if user_id not in users:
-        users.add(user_id)
-        with open(USERS_FILE, 'w') as f:
-            json.dump(list(users), f)
+def add_user(user_id, username):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+    is_new = c.fetchone() is None
+    
+    if is_new:
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("INSERT INTO users (user_id, username, join_date) VALUES (?, ?, ?)", (user_id, username, date_str))
+    
+    conn.commit()
+    conn.close()
+    return is_new
 
-# === КОРИСТУВАЦЬКИЙ ІНТЕРФЕЙС ===
+def get_all_users():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE is_banned = 0")
+    users = [row[0] for row in c.fetchall()]
+    conn.close()
+    return users
+
+def set_ban_status(user_id, status):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE users SET is_banned = ? WHERE user_id = ?", (status, user_id))
+    conn.commit()
+    conn.close()
+
+def is_banned(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,))
+    result = c.fetchone()
+    conn.close()
+    return result[0] == 1 if result else False
+
+def inc_ticket_count():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE stats SET value = value + 1 WHERE key = 'total_tickets'")
+    conn.commit()
+    conn.close()
+
+def get_stats():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
+    banned_users = c.fetchone()[0]
+    
+    c.execute("SELECT value FROM stats WHERE key = 'total_tickets'")
+    total_tickets = c.fetchone()[0]
+    
+    conn.close()
+    return total_users, banned_users, total_tickets
+
+init_db()
+
+# === КЛАВІАТУРИ ===
 def get_start_kb():
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("🚨 Экстренная связь / ЧП", callback_data="type_urgent"),
         types.InlineKeyboardButton("🤝 Предложения и сотрудничество", callback_data="type_collab"),
         types.InlineKeyboardButton("🐛 Сообщить о баге", callback_data="type_bug"),
-        types.InlineKeyboardButton("📝 Подать заявку в Администрацию", callback_data="type_apply") # НОВА КНОПКА
+        types.InlineKeyboardButton("📝 Подать заявку в Администрацию", callback_data="type_apply")
     )
     return markup
 
@@ -56,34 +111,44 @@ def get_cancel_kb():
     return markup
 
 def get_admin_kb():
-    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("📢 Сделать рассылку (Оповещение)", callback_data="admin_broadcast"),
-        types.InlineKeyboardButton("📊 Статистика бота", callback_data="admin_stats")
+        types.InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast"),
+        types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"),
+        types.InlineKeyboardButton("⛔️ Забанить", callback_data="admin_ban"),
+        types.InlineKeyboardButton("✅ Разбанить", callback_data="admin_unban")
     )
     return markup
 
+# === КОМАНДИ ===
 @bot.message_handler(commands=['start'])
 def start_command(message):
-    save_user(message.chat.id) # Зберігаємо користувача для розсилки
-    user_states.pop(message.chat.id, None)
+    user_id = message.chat.id
+    username = f"@{message.from_user.username}" if message.from_user.username else "Анонимный"
     
+    # Реєстрація та перевірка на новенького
+    is_new = add_user(user_id, username)
+    if is_new:
+        for owner in OWNERS:
+            try:
+                bot.send_message(owner, f"👤 <b>Новый игрок в боте!</b>\nПользователь: {username}\nID: <code>{user_id}</code>")
+            except: pass
+
+    if is_banned(user_id):
+        return bot.send_message(user_id, "⛔️ <b>Вы заблокированы</b> и не можете обращаться в поддержку.")
+
+    user_states.pop(user_id, None)
     text = (
         "<b>Официальная служба поддержки DragPolit</b>\n\n"
         "Выберите необходимый раздел меню. Обратите внимание, что спам и ложные вызовы могут привести к блокировке."
     )
-    bot.send_message(message.chat.id, text, reply_markup=get_start_kb())
+    bot.send_message(user_id, text, reply_markup=get_start_kb())
 
 @bot.message_handler(commands=['admin'])
 def admin_panel_command(message):
     if message.chat.id not in OWNERS:
         return bot.reply_to(message, "⛔️ У вас нет доступа к этой команде.")
-    
-    bot.send_message(
-        message.chat.id, 
-        "👑 <b>Панель управления Владельцев</b>\nЗдесь вы можете управлять ботом:", 
-        reply_markup=get_admin_kb()
-    )
+    bot.send_message(message.chat.id, "👑 <b>Панель управления Владельцев</b>:", reply_markup=get_admin_kb())
 
 @bot.message_handler(commands=['get_id'])
 def get_id_command(message):
@@ -94,7 +159,7 @@ def cancel_action(call):
     user_states.pop(call.message.chat.id, None)
     bot.edit_message_text("Действие отменено. Возврат в главное меню.", call.message.chat.id, call.message.message_id, reply_markup=get_start_kb())
 
-# === ОБРОБКА АДМІН-КНОПОК ===
+# === АДМІН-КНОПКИ В ЛС ===
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
 def handle_admin_callbacks(call):
     if call.message.chat.id not in OWNERS:
@@ -103,94 +168,129 @@ def handle_admin_callbacks(call):
     action = call.data.split('_')[1]
     
     if action == 'stats':
-        users_count = len(load_users())
-        bot.edit_message_text(f"📊 <b>Статистика:</b>\nВсего пользователей в базе: {users_count}", call.message.chat.id, call.message.message_id, reply_markup=get_admin_kb())
+        total_users, banned_users, total_tickets = get_stats()
+        text = f"📊 <b>Расширенная статистика:</b>\n\n👥 Всего пользователей: <b>{total_users}</b>\n⛔️ В бане: <b>{banned_users}</b>\n📩 Обработано тикетов: <b>{total_tickets}</b>"
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_admin_kb())
     
     elif action == 'broadcast':
         user_states[call.message.chat.id] = {'state': 'waiting_broadcast'}
-        bot.edit_message_text("📢 <b>Рассылка</b>\nОтправьте сообщение (текст, фото или видео), которое нужно разослать всем пользователям бота:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
+        bot.edit_message_text("📢 <b>Рассылка</b>\nОтправьте сообщение (текст/фото/видео) для рассылки всем пользователям:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
+        
+    elif action == 'ban':
+        user_states[call.message.chat.id] = {'state': 'waiting_ban'}
+        bot.edit_message_text("⛔️ <b>Блокировка</b>\nОтправьте цифровой ID пользователя для бана:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
 
-# === ОБРОБКА КНОПОК МЕНЮ ===
+    elif action == 'unban':
+        user_states[call.message.chat.id] = {'state': 'waiting_unban'}
+        bot.edit_message_text("✅ <b>Разблокировка</b>\nОтправьте цифровой ID пользователя для разбана:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
+
+# === МЕНЮ ГРАВЦІВ ===
 @bot.callback_query_handler(func=lambda call: call.data.startswith('type_'))
 def handle_main_menu(call):
+    if is_banned(call.message.chat.id):
+        return bot.answer_callback_query(call.id, "Вы заблокированы!", show_alert=True)
+
     action = call.data.split('_')[1]
     
+    # Інтерактивна анкета для адмінів
+    if action == 'apply':
+        user_states[call.message.chat.id] = {'state': 'apply_step_1', 'answers': {}}
+        return bot.edit_message_text("📝 <b>Шаг 1 из 3:</b>\nНапишите ваше Имя и Возраст (например: Иван, 16):", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
+
+    # Звичайні тікети
     if action == 'bug':
-        text = "🛠 <b>Баг-репорт</b>\nОпишите проблему одним сообщением:\n1. Что сломалось?\n2. Где?\n3. Как повторить?"
+        text = "🛠 <b>Баг-репорт</b>\nОпишите проблему:\n1. Что сломалось?\n2. Где?\n3. Как повторить?"
         category = "Баг-репорт"
     elif action == 'urgent':
-        text = "🚨 <b>Экстренная связь (ЧП)</b>\nПодробно опишите проблему. Руководство рассмотрит ее вне очереди."
+        text = "🚨 <b>Экстренная связь (ЧП)</b>\nПодробно опишите вашу проблему."
         category = "ЧП / Срочно"
     elif action == 'collab':
-        text = "🤝 <b>Сотрудничество</b>\nОпишите ваше коммерческое предложение или идею."
+        text = "🤝 <b>Сотрудничество</b>\nОпишите суть вашего предложения."
         category = "Сотрудничество"
-    elif action == 'apply':
-        text = "📝 <b>Набор в Администрацию</b>\nНапишите вашу заявку одним сообщением:\n1. Имя и возраст\n2. Почему хотите стать админом?\n3. Ваш опыт работы."
-        category = "Заявка в админы"
         
     user_states[call.message.chat.id] = {'state': 'waiting_ticket', 'category': category}
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
 
-def smart_auto_reply(text):
-    text_lower = text.lower()
-    if "як грати" in text_lower or "как играть" in text_lower:
-        return "🤖 <b>Авто-ответ:</b> Инструкцию по игре вы можете найти в нашем главном канале или закрепе группы."
-    if "скачать" in text_lower or "завантажити" in text_lower:
-        return "🤖 <b>Авто-ответ:</b> Все официальные ссылки на скачивание находятся в описании нашего профиля."
-    return None
-
-# === ОБРОБКА ВВОДУ (ТІКЕТИ ТА РОЗСИЛКА) ===
+# === ОБРОБКА ВВОДУ ВІД КОРИСТУВАЧІВ ТА АДМІНІВ ===
 @bot.message_handler(func=lambda message: message.chat.id in user_states, content_types=['text', 'photo', 'video', 'document'])
 def handle_user_input(message):
-    user_data = user_states.pop(message.chat.id)
+    user_data = user_states.get(message.chat.id)
     state = user_data.get('state')
     
-    # --- РОЗСИЛКА ВІД ВЛАСНИКІВ ---
+    # --- АДМІН-ФУНКЦІЇ ---
     if state == 'waiting_broadcast':
-        users = load_users()
-        success_count = 0
+        user_states.pop(message.chat.id)
+        users = get_all_users()
+        success = 0
         bot.send_message(message.chat.id, "⏳ Начинаю рассылку...")
         for uid in users:
             try:
                 bot.copy_message(uid, message.chat.id, message.message_id)
-                success_count += 1
-            except Exception:
-                pass # Користувач заблокував бота
-        bot.send_message(message.chat.id, f"✅ Рассылка завершена!\nДоставлено: {success_count} пользователям.", reply_markup=get_admin_kb())
-        return
+                success += 1
+            except: pass
+        return bot.send_message(message.chat.id, f"✅ Разослано: {success} пользователям.", reply_markup=get_admin_kb())
+
+    if state in ['waiting_ban', 'waiting_unban']:
+        user_states.pop(message.chat.id)
+        try:
+            target_id = int(message.text.strip())
+            is_ban = (state == 'waiting_ban')
+            set_ban_status(target_id, 1 if is_ban else 0)
+            status_text = "заблокирован ⛔️" if is_ban else "разблокирован ✅"
+            return bot.send_message(message.chat.id, f"Пользователь <code>{target_id}</code> успешно {status_text}.", reply_markup=get_admin_kb())
+        except ValueError:
+            return bot.send_message(message.chat.id, "❌ Ошибка! Нужно отправить только цифры (ID).", reply_markup=get_admin_kb())
+
+    # --- ІНТЕРАКТИВНА АНКЕТА В АДМІНИ ---
+    if state.startswith('apply_step_'):
+        if not message.text:
+            return bot.send_message(message.chat.id, "⚠️ Пожалуйста, отправьте текст.", reply_markup=get_cancel_kb())
+            
+        if state == 'apply_step_1':
+            user_states[message.chat.id]['answers']['name_age'] = message.text
+            user_states[message.chat.id]['state'] = 'apply_step_2'
+            return bot.send_message(message.chat.id, "📝 <b>Шаг 2 из 3:</b>\nКакой у вас опыт игры на RP-проектах и почему вы хотите стать админом?", reply_markup=get_cancel_kb())
+            
+        elif state == 'apply_step_2':
+            user_states[message.chat.id]['answers']['experience'] = message.text
+            user_states[message.chat.id]['state'] = 'apply_step_3'
+            return bot.send_message(message.chat.id, "📝 <b>Шаг 3 из 3:</b>\nСколько часов в день вы готовы уделять проекту?", reply_markup=get_cancel_kb())
+            
+        elif state == 'apply_step_3':
+            answers = user_states[message.chat.id]['answers']
+            user_states.pop(message.chat.id)
+            
+            username = f"@{message.from_user.username}" if message.from_user.username else "Анонимный"
+            app_text = f"📝 <b>НОВАЯ ЗАЯВКА В АДМИНЫ</b>\n👤 От: {username}\n🔑 ID: <code>{message.chat.id}</code>\n━━━━━━━━━━━━━━━━━━\n<b>1. Имя/Возраст:</b> {answers['name_age']}\n<b>2. Опыт:</b> {answers['experience']}\n<b>3. Онлайн:</b> {message.text}"
+            
+            for target in list(OWNERS) + [ADMIN_GROUP_ID]:
+                try: bot.send_message(target, app_text)
+                except: pass
+            
+            inc_ticket_count()
+            return bot.send_message(message.chat.id, "✅ Ваша заявка успешно отправлена руководству! Ожидайте ответа.", reply_markup=get_start_kb())
 
     # --- ЗВИЧАЙНІ ТІКЕТИ ---
-    username = f"@{message.from_user.username}" if message.from_user.username else "Анонимный"
-    user_id = message.chat.id
-    category = user_data['category']
-    
-    if message.text:
-        auto_reply = smart_auto_reply(message.text)
-        if auto_reply:
-            bot.send_message(message.chat.id, auto_reply)
-
-    header = f"📌 <b>{category}</b>\n👤 От: {username}\n🔑 ID: <code>{user_id}</code>\n━━━━━━━━━━━━━━━━━━"
-    
-    # Функція для відправки повідомлення усім цільовим чатам (Група + ЛС Власників)
-    targets = set(OWNERS)
-    if ADMIN_GROUP_ID:
-        targets.add(str(ADMIN_GROUP_ID))
+    if state == 'waiting_ticket':
+        user_data = user_states.pop(message.chat.id)
+        category = user_data['category']
+        username = f"@{message.from_user.username}" if message.from_user.username else "Анонимный"
+        header = f"📌 <b>{category}</b>\n👤 От: {username}\n🔑 ID: <code>{message.chat.id}</code>\n━━━━━━━━━━━━━━━━━━"
         
-    for target in targets:
-        try:
-            if message.content_type == 'text':
-                safe_text = message.text.replace('<', '&lt;').replace('>', '&gt;')
-                bot.send_message(target, f"{header}\n{safe_text}")
-            else:
-                bot.send_message(target, header)
-                bot.copy_message(target, message.chat.id, message.message_id)
-        except Exception as e:
-            print(f"Помилка відправки тікета в {target}: {e}")
+        for target in list(OWNERS) + [ADMIN_GROUP_ID]:
+            try:
+                if message.content_type == 'text':
+                    bot.send_message(target, f"{header}\n{message.text.replace('<', '&lt;').replace('>', '&gt;')}")
+                else:
+                    bot.send_message(target, header)
+                    bot.copy_message(target, message.chat.id, message.message_id)
+            except: pass
 
-    bot.send_message(message.chat.id, "✅ Ваше обращение успешно отправлено руководству.", reply_markup=get_start_kb())
+        inc_ticket_count()
+        bot.send_message(message.chat.id, "✅ Ваше обращение отправлено. Руководство скоро вам ответит.", reply_markup=get_start_kb())
 
 
-# === ВІДПОВІДІ КЕРІВНИЦТВА (REPLY) ===
+# === ВІДПОВІДІ КЕРІВНИЦТВА (REPLY В ЛС ТА ГРУПІ) ===
 @bot.message_handler(func=lambda message: (str(message.chat.id) == str(ADMIN_GROUP_ID) or message.chat.id in OWNERS) and message.reply_to_message is not None)
 def handle_admin_reply(message):
     if message.reply_to_message.from_user.id != bot.get_me().id:
@@ -200,51 +300,44 @@ def handle_admin_reply(message):
     match = re.search(r"ID:\s*(\d+)", bot_text)
     
     if match:
-        target_user_id = int(match.group(1))
+        target_id = int(match.group(1))
         safe_reply = message.text.replace('<', '&lt;').replace('>', '&gt;')
         official_reply = f"🛡 <b>Ответ руководства DragPolit:</b>\n\n<i>{safe_reply}</i>"
         
         try:
-            bot.send_message(target_user_id, official_reply)
-            bot.reply_to(message, "✅ Ответ успешно доставлен пользователю.")
-        except Exception as e:
-            bot.reply_to(message, "⚠️ Ошибка доставки (возможно, пользователь заблокировал бота).")
+            bot.send_message(target_id, official_reply)
+            bot.reply_to(message, "✅ Ответ успешно доставлен.")
+        except:
+            bot.reply_to(message, "⚠️ Ошибка доставки (пользователь заблокировал бота).")
     else:
-        bot.reply_to(message, "❌ Не удалось найти ID пользователя. Отвечайте (Reply) именно на сообщение с заголовком.")
+        bot.reply_to(message, "❌ Не удалось найти ID. Делайте Reply на сообщение бота с заголовком.")
 
-# === РАБОТА СЕРВЕРА ===
+
+# === RENDER WEB-СЕРВЕР ТА БЕЗПЕЧНИЙ ЗАПУСК ===
 app = Flask(__name__)
-
 @app.route('/')
-def keep_alive():
-    return "DragPolit Support Engine is Active."
+def keep_alive(): return "DragPolit Support Engine is Active!"
 
 def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
-# === ОНОВЛЕНИЙ БЕЗПЕЧНИЙ ЗАПУСК ===
 def start_bot():
-    try:
-        # Видаляємо всі завислі процеси/вебхуки перед новим підключенням
-        bot.delete_webhook(drop_pending_updates=True)
-    except Exception:
-        pass
+    try: bot.delete_webhook(drop_pending_updates=True)
+    except: pass
 
     while True:
         try:
-            print("Бот підтримки підключений...")
+            print("Бот DragPolit підключений до серверів Telegram...")
             bot.infinity_polling(timeout=10, long_polling_timeout=5, none_stop=True)
         except telebot.apihelper.ApiTelegramException as e:
             if e.error_code == 409:
-                print("⚠️ Конфлікт (409): Бот вже десь працює! (Можливо старий процес Render ще не закрився). Чекаємо 15 секунд...")
+                print("⚠️ Конфлікт (409): Чекаємо закриття старого процесу...")
                 time.sleep(15)
             else:
-                print(f"Помилка Telegram API: {e}")
                 time.sleep(5)
         except Exception as e:
-            print(f"Збій API: {e}. Перезапуск через 10 секунд...")
-            time.sleep(10)
+            print(f"Помилка: {e}. Перезапуск...")
+            time.sleep(5)
 
 if __name__ == '__main__':
     threading.Thread(target=run_web_server, daemon=True).start()
