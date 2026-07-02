@@ -191,7 +191,6 @@ def handle_user_input(message):
 
 
 # === ВІДПОВІДІ КЕРІВНИЦТВА (REPLY) ===
-# Працює і в групі адмінів, і в ЛС власників
 @bot.message_handler(func=lambda message: (str(message.chat.id) == str(ADMIN_GROUP_ID) or message.chat.id in OWNERS) and message.reply_to_message is not None)
 def handle_admin_reply(message):
     if message.reply_to_message.from_user.id != bot.get_me().id:
@@ -224,12 +223,25 @@ def run_web_server():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
+# === ОНОВЛЕНИЙ БЕЗПЕЧНИЙ ЗАПУСК ===
 def start_bot():
+    try:
+        # Видаляємо всі завислі процеси/вебхуки перед новим підключенням
+        bot.delete_webhook(drop_pending_updates=True)
+    except Exception:
+        pass
+
     while True:
         try:
-            bot.remove_webhook()
             print("Бот підтримки підключений...")
             bot.infinity_polling(timeout=10, long_polling_timeout=5, none_stop=True)
+        except telebot.apihelper.ApiTelegramException as e:
+            if e.error_code == 409:
+                print("⚠️ Конфлікт (409): Бот вже десь працює! (Можливо старий процес Render ще не закрився). Чекаємо 15 секунд...")
+                time.sleep(15)
+            else:
+                print(f"Помилка Telegram API: {e}")
+                time.sleep(5)
         except Exception as e:
             print(f"Збій API: {e}. Перезапуск через 10 секунд...")
             time.sleep(10)
