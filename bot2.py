@@ -14,7 +14,7 @@ ADMIN_GROUP_ID = "-1614259542"
 
 # ВПИШІТЬ СЮДИ ЦИФРОВІ ID ВЛАСНИКІВ (@dragwayder та @p1vi_k)
 # Їх можна дізнатися, якщо кожен з власників напише боту команду /get_id
-OWNERS = [111111111, 222222222] 
+OWNERS = [1614259542, 222222222] 
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 
