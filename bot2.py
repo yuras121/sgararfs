@@ -26,18 +26,13 @@ DB_FILE = 'dragpolit_enterprise.db'
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Реестр пользователей
     c.execute('''CREATE TABLE IF NOT EXISTS users 
                  (user_id INTEGER PRIMARY KEY, username TEXT, is_banned INTEGER DEFAULT 0, join_date TEXT)''')
-    # Системная статистика
     c.execute('''CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER)''')
     c.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('total_tickets', 0)")
-    
-    # ТАБЛИЦА МУЛЬТИ-ВАКАНСИЙ (id, название, описание, статус: 1-открыта, 0-закрыта)
     c.execute('''CREATE TABLE IF NOT EXISTS vacancies 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, is_active INTEGER DEFAULT 1)''')
     
-    # Добавим стартовую вакансию, если таблица пуста
     c.execute("SELECT COUNT(*) FROM vacancies")
     if c.fetchone()[0] == 0:
         start_desc = (
@@ -50,7 +45,6 @@ def init_db():
         c.execute("INSERT INTO vacancies (title, description, is_active) VALUES (?, ?, ?)", 
                   ("Младший Модератор / Стажер", start_desc, 1))
     
-    # Журналы
     c.execute('''CREATE TABLE IF NOT EXISTS history 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, direction TEXT, text TEXT, timestamp TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS admin_audit 
@@ -58,7 +52,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Функции работы с вакансиями
 def get_all_vacancies(only_active=False):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -99,7 +92,6 @@ def delete_vacancy(vac_id):
     conn.commit()
     conn.close()
 
-# Базовые функции базы данных
 def add_user(user_id, username):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -211,7 +203,9 @@ init_db()
 def get_start_kb():
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("🚨 Экстренное обращение (Критический сбой / Жалоба)", callback_data="type_urgent"),
+        types.InlineKeyboardButton("⚖️ Жалоба на Администрацию проекта", callback_data="type_adminreport"),
+        types.InlineKeyboardButton("👤 Жалоба на Игрока (Разъяснение)", callback_data="type_playerreport"),
+        types.InlineKeyboardButton("🚨 Критический сбой / Экстренная связь", callback_data="type_urgent"),
         types.InlineKeyboardButton("🤝 Коммерческий и партнерский отдел", callback_data="type_collab"),
         types.InlineKeyboardButton("🛠 Технический отдел (Отчет об ошибке)", callback_data="type_bug"),
         types.InlineKeyboardButton("📋 Кадровый отдел (Открытые вакансии)", callback_data="type_apply")
@@ -295,16 +289,11 @@ def get_ticket_action_kb(user_id):
     markup.add(types.InlineKeyboardButton("⛔️ Блокировать нарушителя", callback_data=f"tban_{user_id}"))
     return markup
 
-# ==========================================
-# 4. СЛУЖЕБНЫЕ УВЕДОМЛЕНИЯ РУКОВОДСТВА
-# ==========================================
 def notify_other_owners(sender_id, text):
     for owner in OWNERS:
         if owner != sender_id:
-            try:
-                bot.send_message(owner, f"🛡 <b>СЛУЖЕБНЫЙ АУДИТ ДЕЙСТВИЙ:</b>\n{text}")
-            except Exception:
-                pass
+            try: bot.send_message(owner, f"🛡 <b>СЛУЖЕБНЫЙ АУДИТ ДЕЙСТВИЙ:</b>\n{text}")
+            except Exception: pass
 
 # ==========================================
 # 5. ОБРАБОТЧИКИ КОМАНД
@@ -317,10 +306,8 @@ def start_command(message):
     is_new = add_user(user_id, username)
     if is_new:
         for owner in OWNERS:
-            try:
-                bot.send_message(owner, f"👤 <b>Новая регистрация в системе DragPolit:</b>\nСубъект: {username} | ID: <code>{user_id}</code>")
-            except Exception:
-                pass
+            try: bot.send_message(owner, f"👤 <b>Новая регистрация в системе DragPolit:</b>\nСубъект: {username} | ID: <code>{user_id}</code>")
+            except Exception: pass
 
     if is_banned(user_id):
         return bot.send_message(user_id, "⛔️ <b>Доступ ограничен.</b> Обслуживание вашей учетной записи приостановлено.")
@@ -328,7 +315,7 @@ def start_command(message):
     user_states.pop(user_id, None)
     text = (
         "🏛 <b>Официальный портал поддержки проекта DragPolit</b>\n\n"
-        "Добро пожаловать. Данная система предназначена для официальной коммуникации с высшим руководством проекта.\n\n"
+        "Добро пожаловать. Данная система предназначена для коммуникации с высшим руководством проекта.\n\n"
         "⚠️ <i>Обратите внимание: подача заведомо ложных обращений преследуется блокировкой доступа. Выберите профильный отдел:</i>"
     )
     bot.send_message(user_id, text, reply_markup=get_start_kb())
@@ -349,7 +336,7 @@ def get_id_command(message):
 @bot.callback_query_handler(func=lambda call: call.data == 'cancel_action')
 def cancel_action(call):
     user_states.pop(call.message.chat.id, None)
-    bot.edit_message_text("⭕️ Действие прервано пользователем. Возврат в главное меню.", call.message.chat.id, call.message.message_id, reply_markup=get_start_kb())
+    bot.edit_message_text("⭕️ Действие прервано. Возврат в главное меню.", call.message.chat.id, call.message.message_id, reply_markup=get_start_kb())
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('vacadmin_'))
 def handle_vac_admin_menu(call):
@@ -358,7 +345,7 @@ def handle_vac_admin_menu(call):
     
     if action == 'add':
         user_states[call.message.chat.id] = {'state': 'addvac_title'}
-        bot.edit_message_text("➕ <b>ДОБАВЛЕНИЕ НОВОЙ ВАКАНСИИ (Шаг 1 из 2)</b>\n\n👉 Отправьте следующим сообщением <b>название должности</b> (например: <i>Модератор Discord</i> или <i>Технический Администратор</i>):", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
+        bot.edit_message_text("➕ <b>ДОБАВЛЕНИЕ НОВОЙ ВАКАНСИИ (Шаг 1 из 2)</b>\n\n👉 Отправьте следующим сообщением <b>название должности</b> (например: <i>Модератор Discord</i>):", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
     elif action == 'list':
         bot.edit_message_text("📋 <b>СПИСОК ВСЕХ ВАКАНСИЙ СИСТЕМЫ:</b>\nВыберите вакансию для управления её статусом или удаления:", call.message.chat.id, call.message.message_id, reply_markup=get_vacancies_list_kb())
     elif action == 'back':
@@ -383,7 +370,6 @@ def handle_single_vac_manage(call):
         vac = get_vacancy(vac_id)
         log_admin_action(call.from_user.id, admin_name, f"Изменил статус вакансии #{vac_id}", 0)
         bot.answer_callback_query(call.id, "Статус вакансии успешно изменен!")
-        # Перерисовываем меню
         status_str = "🟢 Открыта (Видна игрокам)" if vac[3] == 1 else "🔴 Закрыта (Скрыта от игроков)"
         text = f"💼 <b>Управление вакансией #{vac[0]}</b>\n\n<b>Название:</b> {vac[1]}\n<b>Текущий статус:</b> {status_str}\n\n<b>Описание и требования:</b>\n{vac[2]}"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_single_vac_manage_kb(vac_id))
@@ -477,7 +463,19 @@ def handle_main_menu(call):
 
     action = call.data.split('_')[1]
     
-    if action == 'apply':
+    # НОВЕ: Жалоба на звичайного ігрока (Автовідповідь без турбування вищого керівництва)
+    if action == 'playerreport':
+        info_text = (
+            "👤 <b>РЕГЛАМЕНТ ПОДАЧИ ЖАЛОБ НА ИГРОКОВ</b>\n\n"
+            "Высшее руководство DragPolit не занимается рассмотрением бытовых жалоб на обычных игроков или нарушений правил чата/игрового процесса в данном портале.\n\n"
+            "👉 <b>Для подачи жалобы на игрока:</b>\n"
+            "1. Воспользуйтесь внутриигровым репортом на сервере.\n"
+            "2. Обратитесь в личные сообщения к действующему дежурному модератору в официальных каналах связи.\n\n"
+            "<i>Высшее руководство рассматривает исключительно жалобы на неправомерные действия самой администрации проекта.</i>"
+        )
+        return bot.edit_message_text(info_text, call.message.chat.id, call.message.message_id, reply_markup=get_start_kb())
+
+    elif action == 'apply':
         active_vacs = get_all_vacancies(only_active=True)
         if not active_vacs:
             closed_text = (
@@ -491,8 +489,9 @@ def handle_main_menu(call):
             text = "🏛 <b>КАДРОВЫЙ ОТДЕЛ DRAGPOLIT</b>\n\nВ настоящий момент открыты следующие вакансии. Выберите интересующую должность для ознакомления с требованиями:"
             return bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_public_vacancies_kb())
 
+    elif action == 'adminreport': text, cat = "⚖️ <b>Жалоба на Администрацию:</b>\nУкажите никнейм администратора, дату/время инцидента и подробно опишите суть неправомерных действий (желательно прикрепить доказательства):", "Жалоба на Администрацию"
     elif action == 'bug': text, cat = "🛠 <b>Технический регламент:</b>\nПодробно опишите выявленный сбой:\n1. Суть ошибки\n2. Локация/механика\n3. Способ воспроизведения", "Технический отдел"
-    elif action == 'urgent': text, cat = "🚨 <b>Экстренный регламент:</b>\nИзложите суть критической ситуации или неправомерных действий. Запрос будет рассмотрен руководством в приоритетном порядке.", "Экстренное обращение"
+    elif action == 'urgent': text, cat = "🚨 <b>Экстренный регламент:</b>\nИзложите суть критической ситуации или сбоя. Запрос будет рассмотрен руководством в приоритетном порядке.", "Экстренное обращение"
     elif action == 'collab': text, cat = "🤝 <b>Коммерческий регламент:</b>\nИзложите суть коммерческого предложения с указанием контактов для связи.", "Партнерский отдел"
         
     user_states[call.message.chat.id] = {'state': 'waiting_ticket', 'category': cat}
@@ -507,14 +506,12 @@ def handle_all_messages(message):
     state = state_data.get('state')
     admin_name = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
 
-    # 1. ДОБАВЛЕНИЕ ВАКАНСИИ (ШАГ 1 - НАЗВАНИЕ)
     if message.chat.id in OWNERS and state == 'addvac_title':
         if not message.text:
             return bot.send_message(message.chat.id, "❌ Отправьте название текстом.")
         user_states[message.chat.id] = {'state': 'addvac_desc', 'title': message.text}
         return bot.send_message(message.chat.id, f"➕ Название: <b>«{message.text}»</b>\n\n👉 Теперь следующим сообщением отправьте <b>описание и требования</b> к кандидатам на эту должность:", reply_markup=get_cancel_kb())
 
-    # 2. ДОБАВЛЕНИЕ ВАКАНСИИ (ШАГ 2 - ОПИСАНИЕ)
     if message.chat.id in OWNERS and state == 'addvac_desc':
         if not message.text:
             return bot.send_message(message.chat.id, "❌ Отправьте описание текстом.")
@@ -525,7 +522,6 @@ def handle_all_messages(message):
         notify_other_owners(message.from_user.id, f"Руководитель {admin_name} добавил новую вакансию «{title}».")
         return bot.send_message(message.chat.id, f"✅ <b>Вакансия «{title}» успешно создана и открыта для игроков!</b>", reply_markup=get_admin_kb())
 
-    # 3. ОТВЕТ РУКОВОДСТВА НА ТИКЕТ
     if message.chat.id in OWNERS and state == 'typing_reply':
         target_id = state_data['target']
         user_states.pop(message.chat.id)
@@ -546,7 +542,6 @@ def handle_all_messages(message):
             bot.send_message(message.chat.id, "⚠️ Сбой доставки: пользователь заблокировал портал поддержки.")
         return
 
-    # 4. МАССОВАЯ РАССЫЛКА ОТ РУКОВОДСТВА
     if message.chat.id in OWNERS and state == 'waiting_broadcast':
         user_states.pop(message.chat.id)
         users = get_all_users()
@@ -561,7 +556,6 @@ def handle_all_messages(message):
         notify_other_owners(message.from_user.id, f"📢 Руководитель {admin_name} произвел массовую рассылку. Доставлено: {success} субъектам.")
         return bot.send_message(message.chat.id, f"✅ Официальное оповещение доставлено: {success} субъектам.")
 
-    # 5. БЛОКИРОВКА / РАЗБЛОКИРОВКА ВРУЧНУЮ ЧЕРЕЗ ID
     if message.chat.id in OWNERS and state in ['waiting_ban', 'waiting_unban']:
         user_states.pop(message.chat.id)
         try:
@@ -576,10 +570,8 @@ def handle_all_messages(message):
         except ValueError:
             return bot.send_message(message.chat.id, "❌ Ошибка: системный ID должен состоять исключительно из цифр.", reply_markup=get_admin_kb())
 
-    # 6. ИГНОРИРОВАНИЕ ЗАБЛОКИРОВАННЫХ
     if is_banned(message.chat.id): return
 
-    # 7. ПОЭТАПНОЕ АНКЕТИРОВАНИЕ НА СТАЖИРОВКУ
     if state and state.startswith('apply_step_'):
         if not message.text:
             return bot.send_message(message.chat.id, "⚠️ Ошибка регламента: на данном этапе требуется текстовый ответ.")
@@ -614,13 +606,13 @@ def handle_all_messages(message):
                 except Exception: pass
             return bot.send_message(message.chat.id, "✅ <b>Анкета зарегистрирована.</b> Данные переданы на рассмотрение руководству Кадрового отдела DragPolit.")
 
-    # 8. ПРИЕМ ТИКЕТОВ И ОБЩИЙ ПОТОК
+    # ПРИЕМ ТИКЕТОВ И ОБЩИЙ ПОТОК (ОТ ИГРОКОВ)
     if message.chat.id not in OWNERS:
         category = "💬 Общий поток (Без классификации)"
         if state == 'waiting_ticket':
             category = user_states[message.chat.id]['category']
             user_states.pop(message.chat.id)
-            bot.send_message(message.chat.id, "✅ <b>Обращение зарегистрировано.</b> Тикет передан профильному отделу. Ожидайте официального решения.")
+            bot.send_message(message.chat.id, "✅ <b>Обращение зарегистрировано.</b> Тикет передан высшему руководству. Ожидайте решения.")
         else:
             bot.send_message(message.chat.id, "ℹ️ Ваше сообщение принято системой. Для точной маршрутизации запроса рекомендуем использовать официальное меню: /start")
             
@@ -643,6 +635,9 @@ def handle_all_messages(message):
                     bot.send_message(owner, header)
                     bot.copy_message(owner, message.chat.id, message.message_id, reply_markup=get_ticket_action_kb(message.chat.id))
             except Exception: pass
+    # НОВЕ: Відповідь Власнику, якщо він пише просто так без меню
+    else:
+        bot.send_message(message.chat.id, "👑 <b>Система DragPolit в строю!</b>\nБосс, я распознал вас как руководителя высшего звена, поэтому я не создаю тикет от вашего имени.\n\n👉 Для входа в терминал управления введите команду: /admin\n👉 Для просмотра меню игрока нажмите: /start")
 
 # ==========================================
 # 8. БЕЗПЕРЕБОЙНЫЙ ЗАПУСК СЕРВЕРА
