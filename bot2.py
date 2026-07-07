@@ -6,13 +6,20 @@ import telebot
 from telebot import types
 from flask import Flask
 from datetime import datetime
+import sys
 
 # ==========================================
-# 1. КОНФИГУРАЦИЯ СИСТЕМЫ И ДОСТУПЫ
+# 1. КОНФИГУРАЦИЯ СИСТЕМЫ И ДОСТУПЫ (БЕЗОПАСНАЯ)
 # ==========================================
-TOKEN = os.environ.get('TOKEN', '8252581199:AAHNfedYh1MrQVNBrL6mYf6OJVoTim_dApM')
+# Токен берется ИСКЛЮЧИТЕЛЬНО из скрытых переменных сервера. 
+# Никаких токенов в коде!
+TOKEN = os.environ.get('TOKEN')
 
-# ID Владельцев (Управление исключительно из ЛС)
+if not TOKEN:
+    print("❌ КРИТИЧЕСКАЯ ОШИБКА: Токен бота не найден! Убедитесь, что переменная TOKEN добавлена в Environment Variables на хостинге.")
+    sys.exit(1) # Останавливаем систему, чтобы избежать сбоев
+
+# Идентификаторы Высшего Руководства (Доступ к терминалу)
 OWNERS = [1614259542, 7716987740] 
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
@@ -36,11 +43,13 @@ def init_db():
     c.execute("SELECT COUNT(*) FROM vacancies")
     if c.fetchone()[0] == 0:
         start_desc = (
-            "<b>Официальные требования Кадрового отдела DragPolit:</b>\n"
-            "• Возраст от 15 лет (возможны исключения по решению высшего руководства).\n"
-            "• Идеальное знание RP-регламента, терминологии и игровых механик проекта.\n"
-            "• Грамотная письменная речь, беспристрастность, хладнокровие и стрессоустойчивость.\n"
-            "• Наличие свободного времени и суточный онлайн строго от 3-х часов."
+            "<b>Официальные требования Департамента Кадров DragPolit:</b>\n"
+            "• Возрастной ценз: от 15 лет (возможны исключения решением руководства).\n"
+            "• Глубокое понимание RP-регламента, терминологии и механик проекта.\n"
+            "• Грамотная письменная речь, беспристрастность, стрессоустойчивость.\n"
+            "• Гарантированный суточный онлайн: от 3-х часов.\n"
+            "• Соблюдение субординации и корпоративной этики.\n\n"
+            "⚠️ <i>Кандидаты, предоставляющие ложные данные, вносятся в единый черный список проекта.</i>"
         )
         c.execute("INSERT INTO vacancies (title, description, is_active) VALUES (?, ?, ?)", 
                   ("Младший Модератор / Стажер", start_desc, 1))
@@ -141,24 +150,24 @@ def get_full_users_data():
 def get_history_export():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT user_id, direction, text, timestamp FROM history ORDER BY timestamp DESC LIMIT 500")
+    c.execute("SELECT user_id, direction, text, timestamp FROM history ORDER BY timestamp DESC LIMIT 1000")
     data = c.fetchall()
     conn.close()
     content = "=== ОФИЦИАЛЬНЫЙ РЕЕСТР ОБРАЩЕНИЙ DRAGPOLIT ===\n\n"
     for row in data:
-        dir_text = "[ПОСТУПЛЕНИЕ]" if row[1] == 'in' else "[ОТВЕТ РУКОВОДСТВА]"
+        dir_text = "[ВХОДЯЩЕЕ]" if row[1] == 'in' else "[ОТВЕТ РУКОВОДСТВА]"
         content += f"[{row[3]}] ID: {row[0]} | {dir_text}\nСодержание: {row[2]}\n{'-'*50}\n"
     return content
 
 def get_audit_export():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT admin_id, admin_username, action, target_id, timestamp FROM admin_audit ORDER BY timestamp DESC LIMIT 300")
+    c.execute("SELECT admin_id, admin_username, action, target_id, timestamp FROM admin_audit ORDER BY timestamp DESC LIMIT 500")
     data = c.fetchall()
     conn.close()
-    content = "=== СЛУЖЕБНЫЙ АУДИТ ДЕЙСТВИЙ РУКОВОДСТВА ===\n\n"
+    content = "=== ЖУРНАЛ СЛУЖЕБНОГО АУДИТА РУКОВОДСТВА ===\n\n"
     for row in data:
-        content += f"[{row[4]}] Руководитель: {row[1]} (ID: {row[0]})\nДействие: {row[2]} -> Цель ID: {row[3]}\n{'-'*50}\n"
+        content += f"[{row[4]}] Руководитель: {row[1]} (ID: {row[0]})\nДействие: {row[2]} -> Объект ID: {row[3]}\n{'-'*50}\n"
     return content
 
 def set_ban_status(user_id, status):
@@ -203,44 +212,48 @@ init_db()
 def get_start_kb():
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("⚖️ Жалоба на Администрацию проекта", callback_data="type_adminreport"),
-        types.InlineKeyboardButton("👤 Жалоба на Игрока (Разъяснение)", callback_data="type_playerreport"),
-        types.InlineKeyboardButton("🚨 Критический сбой / Экстренная связь", callback_data="type_urgent"),
-        types.InlineKeyboardButton("🤝 Коммерческий и партнерский отдел", callback_data="type_collab"),
+        types.InlineKeyboardButton("🛡 Департамент контроля (Жалоба на Администрацию)", callback_data="type_adminreport"),
+        types.InlineKeyboardButton("⚖️ Департамент жалоб (Нарушения Игроков)", callback_data="type_playerreport"),
+        types.InlineKeyboardButton("🚨 Экстренное реагирование (Критический сбой)", callback_data="type_urgent"),
         types.InlineKeyboardButton("🛠 Технический отдел (Отчет об ошибке)", callback_data="type_bug"),
-        types.InlineKeyboardButton("📋 Кадровый отдел (Открытые вакансии)", callback_data="type_apply")
+        types.InlineKeyboardButton("🤝 Коммерция и партнерство", callback_data="type_collab"),
+        types.InlineKeyboardButton("💼 Кадровый резерв (Актуальные вакансии)", callback_data="type_apply")
     )
     return markup
 
 def get_cancel_kb():
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("❌ Отменить действие", callback_data="cancel_action"))
+    markup.add(types.InlineKeyboardButton("❌ Прервать протокол", callback_data="cancel_action"))
     return markup
 
 def get_admin_kb():
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("💼 Управление вакансиями (Мульти-система)", callback_data="admin_vac_menu"))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    # Блок 1: Управление и Кадры
+    markup.add(types.InlineKeyboardButton("💼 Управление Кадровым реестром (Вакансии)", callback_data="admin_vac_menu"))
+    # Блок 2: Пользователи
     markup.row(
-        types.InlineKeyboardButton("📢 Оповещение", callback_data="admin_broadcast"),
-        types.InlineKeyboardButton("📊 Аналитика", callback_data="admin_stats")
+        types.InlineKeyboardButton("⛔️ Блокировка доступа", callback_data="admin_ban"),
+        types.InlineKeyboardButton("✅ Восстановление прав", callback_data="admin_unban")
     )
+    # Блок 3: Информирование
     markup.row(
-        types.InlineKeyboardButton("⛔️ Забанить ID", callback_data="admin_ban"),
-        types.InlineKeyboardButton("✅ Разбанить ID", callback_data="admin_unban")
+        types.InlineKeyboardButton("📢 Массовое оповещение", callback_data="admin_broadcast"),
+        types.InlineKeyboardButton("📊 Аналитика системы", callback_data="admin_stats")
     )
+    # Блок 4: Базы данных
     markup.row(
-        types.InlineKeyboardButton("📁 Реестр юзеров", callback_data="admin_export"),
-        types.InlineKeyboardButton("🗂 Журнал тикетов", callback_data="admin_history")
+        types.InlineKeyboardButton("📁 Реестр субъектов", callback_data="admin_export"),
+        types.InlineKeyboardButton("🗂 Архивы обращений", callback_data="admin_history")
     )
-    markup.add(types.InlineKeyboardButton("🛡 Служебный аудит админов", callback_data="admin_audit"))
+    markup.add(types.InlineKeyboardButton("🛡 Журнал служебного аудита", callback_data="admin_audit"))
     return markup
 
 def get_vac_admin_menu_kb():
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("➕ Добавить новую вакансию", callback_data="vacadmin_add"),
-        types.InlineKeyboardButton("📋 Список вакансий (Открыть/Закрыть/Удалить)", callback_data="vacadmin_list"),
-        types.InlineKeyboardButton("🔙 Вернуться в админ-панель", callback_data="vacadmin_back")
+        types.InlineKeyboardButton("➕ Утвердить новую должность (Вакансию)", callback_data="vacadmin_add"),
+        types.InlineKeyboardButton("📋 Реестр должностей (Управление статусами)", callback_data="vacadmin_list"),
+        types.InlineKeyboardButton("🔙 Возврат в главный терминал", callback_data="vacadmin_back")
     )
     return markup
 
@@ -248,19 +261,19 @@ def get_vacancies_list_kb():
     vacs = get_all_vacancies(only_active=False)
     markup = types.InlineKeyboardMarkup(row_width=1)
     for vac in vacs:
-        status_str = "🟢 Открыта" if vac[3] == 1 else "🔴 Закрыта"
+        status_str = "🟢 АКТИВНА" if vac[3] == 1 else "🔴 ПРИОСТАНОВЛЕНА"
         markup.add(types.InlineKeyboardButton(f"{status_str} | {vac[1]}", callback_data=f"vacmanage_{vac[0]}"))
-    markup.add(types.InlineKeyboardButton("🔙 Вернуться к управлению", callback_data="admin_vac_menu"))
+    markup.add(types.InlineKeyboardButton("🔙 Назад к управлению кадрами", callback_data="admin_vac_menu"))
     return markup
 
 def get_single_vac_manage_kb(vac_id):
     vac = get_vacancy(vac_id)
-    toggle_text = "🔴 Закрыть вакансию (Скрыть от игроков)" if vac[3] == 1 else "🟢 Открыть вакансию (Показать игрокам)"
+    toggle_text = "🔴 Приостановить набор (Скрыть)" if vac[3] == 1 else "🟢 Возобновить набор (Открыть)"
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton(toggle_text, callback_data=f"vactoggle_{vac_id}"),
-        types.InlineKeyboardButton("❌ Удалить вакансию навсегда", callback_data=f"vacdel_{vac_id}"),
-        types.InlineKeyboardButton("🔙 К списку вакансий", callback_data="vacadmin_list")
+        types.InlineKeyboardButton("❌ Ликвидировать должность", callback_data=f"vacdel_{vac_id}"),
+        types.InlineKeyboardButton("🔙 К реестру должностей", callback_data="vacadmin_list")
     )
     return markup
 
@@ -269,13 +282,13 @@ def get_public_vacancies_kb():
     markup = types.InlineKeyboardMarkup(row_width=1)
     for vac in vacs:
         markup.add(types.InlineKeyboardButton(f"💼 {vac[1]}", callback_data=f"pubvac_{vac[0]}"))
-    markup.add(types.InlineKeyboardButton("🔙 В главное меню", callback_data="cancel_action"))
+    markup.add(types.InlineKeyboardButton("🔙 Завершить сеанс", callback_data="cancel_action"))
     return markup
 
 def get_apply_confirm_kb(vac_id):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("✍️ Подать анкету на эту должность", callback_data=f"applystart_{vac_id}"),
+        types.InlineKeyboardButton("✍️ Инициировать подачу заявления", callback_data=f"applystart_{vac_id}"),
         types.InlineKeyboardButton("🔙 К списку вакансий", callback_data="type_apply")
     )
     return markup
@@ -283,16 +296,16 @@ def get_apply_confirm_kb(vac_id):
 def get_ticket_action_kb(user_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("📨 Ответить заявителю", callback_data=f"ans_{user_id}"),
-        types.InlineKeyboardButton("📁 Закрыть тикет", callback_data=f"close_{user_id}")
+        types.InlineKeyboardButton("📨 Направить официальный ответ", callback_data=f"ans_{user_id}"),
+        types.InlineKeyboardButton("📁 Архивировать тикет", callback_data=f"close_{user_id}")
     )
-    markup.add(types.InlineKeyboardButton("⛔️ Блокировать нарушителя", callback_data=f"tban_{user_id}"))
+    markup.add(types.InlineKeyboardButton("⛔️ Инициировать блокировку", callback_data=f"tban_{user_id}"))
     return markup
 
 def notify_other_owners(sender_id, text):
     for owner in OWNERS:
         if owner != sender_id:
-            try: bot.send_message(owner, f"🛡 <b>СЛУЖЕБНЫЙ АУДИТ ДЕЙСТВИЙ:</b>\n{text}")
+            try: bot.send_message(owner, f"🛡 <b>ВНУТРЕННИЙ АУДИТ:</b>\n{text}")
             except Exception: pass
 
 # ==========================================
@@ -306,29 +319,36 @@ def start_command(message):
     is_new = add_user(user_id, username)
     if is_new:
         for owner in OWNERS:
-            try: bot.send_message(owner, f"👤 <b>Новая регистрация в системе DragPolit:</b>\nСубъект: {username} | ID: <code>{user_id}</code>")
+            try: bot.send_message(owner, f"👤 <b>Регистрация в базе DragPolit:</b>\nСубъект: {username} | ID: <code>{user_id}</code>")
             except Exception: pass
 
     if is_banned(user_id):
-        return bot.send_message(user_id, "⛔️ <b>Доступ ограничен.</b> Обслуживание вашей учетной записи приостановлено.")
+        return bot.send_message(user_id, "⛔️ <b>СТАТУС: ОТКАЗ В ДОСТУПЕ.</b>\nВ соответствии с регламентом проекта, обслуживание вашей учетной записи прекращено.")
 
     user_states.pop(user_id, None)
     text = (
-        "🏛 <b>Официальный портал поддержки проекта DragPolit</b>\n\n"
-        "Добро пожаловать. Данная система предназначена для коммуникации с высшим руководством проекта.\n\n"
-        "⚠️ <i>Обратите внимание: подача заведомо ложных обращений преследуется блокировкой доступа. Выберите профильный отдел:</i>"
+        "🏛 <b>ОФИЦИАЛЬНАЯ ПРИЕМНАЯ DRAGPOLIT</b>\n\n"
+        "Добро пожаловать в единую систему регистрации обращений. Данный портал обеспечивает прямую связь с Высшим руководством проекта.\n\n"
+        "⚠️ <i>Напоминание: Фиктивные обращения, флуд и несоблюдение субординации влекут за собой бессрочную блокировку профиля. Выберите необходимый департамент:</i>"
     )
     bot.send_message(user_id, text, reply_markup=get_start_kb())
 
 @bot.message_handler(commands=['admin'])
 def admin_panel_command(message):
     if message.chat.id not in OWNERS:
-        return bot.reply_to(message, "⛔️ Ошибка доступа: недостаточный уровень привилегий.")
-    bot.send_message(message.chat.id, "👑 <b>Терминал управления высшего руководства DragPolit:</b>", reply_markup=get_admin_kb())
+        return bot.reply_to(message, "⛔️ <b>Системная ошибка:</b> Недостаточный уровень допуска.")
+    
+    text = (
+        "👑 <b>ТЕРМИНАЛ УПРАВЛЕНИЯ DRAGPOLIT</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Статус авторизации: <b>ВЫСШЕЕ РУКОВОДСТВО</b>\n\n"
+        "Выберите протокол для выполнения:"
+    )
+    bot.send_message(message.chat.id, text, reply_markup=get_admin_kb())
 
 @bot.message_handler(commands=['get_id'])
 def get_id_command(message):
-    bot.reply_to(message, f"Ваш системный ID: <code>{message.chat.id}</code>")
+    bot.reply_to(message, f"Идентификатор вашей сессии: <code>{message.chat.id}</code>")
 
 # ==========================================
 # 6. НАВИГАЦИЯ ПО МЕНЮ И УПРАВЛЕНИЕ ВАКАНСИЯМИ
@@ -336,7 +356,7 @@ def get_id_command(message):
 @bot.callback_query_handler(func=lambda call: call.data == 'cancel_action')
 def cancel_action(call):
     user_states.pop(call.message.chat.id, None)
-    bot.edit_message_text("⭕️ Действие прервано. Возврат в главное меню.", call.message.chat.id, call.message.message_id, reply_markup=get_start_kb())
+    bot.edit_message_text("⭕️ Выполнение протокола прервано. Возврат в главное меню.", call.message.chat.id, call.message.message_id, reply_markup=get_start_kb())
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('vacadmin_'))
 def handle_vac_admin_menu(call):
@@ -345,11 +365,11 @@ def handle_vac_admin_menu(call):
     
     if action == 'add':
         user_states[call.message.chat.id] = {'state': 'addvac_title'}
-        bot.edit_message_text("➕ <b>ДОБАВЛЕНИЕ НОВОЙ ВАКАНСИИ (Шаг 1 из 2)</b>\n\n👉 Отправьте следующим сообщением <b>название должности</b> (например: <i>Модератор Discord</i>):", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
+        bot.edit_message_text("➕ <b>УТВЕРЖДЕНИЕ НОВОЙ ДОЛЖНОСТИ (Этап 1 из 2)</b>\n\n👉 Укажите <b>наименование должности</b> (напр.: <i>Старший Модератор</i>):", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
     elif action == 'list':
-        bot.edit_message_text("📋 <b>СПИСОК ВСЕХ ВАКАНСИЙ СИСТЕМЫ:</b>\nВыберите вакансию для управления её статусом или удаления:", call.message.chat.id, call.message.message_id, reply_markup=get_vacancies_list_kb())
+        bot.edit_message_text("📋 <b>РЕЕСТР ДОЛЖНОСТЕЙ И ВАКАНСИЙ:</b>\nВыберите позицию для управления статусом набора:", call.message.chat.id, call.message.message_id, reply_markup=get_vacancies_list_kb())
     elif action == 'back':
-        bot.edit_message_text("👑 <b>Терминал управления высшего руководства DragPolit:</b>", call.message.chat.id, call.message.message_id, reply_markup=get_admin_kb())
+        bot.edit_message_text("👑 <b>ТЕРМИНАЛ УПРАВЛЕНИЯ DRAGPOLIT</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━", call.message.chat.id, call.message.message_id, reply_markup=get_admin_kb())
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith(('vacmanage_', 'vactoggle_', 'vacdel_')))
 def handle_single_vac_manage(call):
@@ -362,22 +382,22 @@ def handle_single_vac_manage(call):
     if action == 'vacmanage':
         vac = get_vacancy(vac_id)
         if not vac: return
-        status_str = "🟢 Открыта (Видна игрокам)" if vac[3] == 1 else "🔴 Закрыта (Скрыта от игроков)"
-        text = f"💼 <b>Управление вакансией #{vac[0]}</b>\n\n<b>Название:</b> {vac[1]}\n<b>Текущий статус:</b> {status_str}\n\n<b>Описание и требования:</b>\n{vac[2]}"
+        status_str = "🟢 НАБОР АКТИВЕН (Отображается)" if vac[3] == 1 else "🔴 НАБОР ПРИОСТАНОВЛЕН (Скрыт)"
+        text = f"💼 <b>НОМЕНКЛАТУРА #{vac[0]}</b>\n\n<b>Должность:</b> {vac[1]}\n<b>Системный статус:</b> {status_str}\n\n<b>Утвержденные требования:</b>\n{vac[2]}"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_single_vac_manage_kb(vac_id))
     elif action == 'vactoggle':
         toggle_vacancy(vac_id)
         vac = get_vacancy(vac_id)
         log_admin_action(call.from_user.id, admin_name, f"Изменил статус вакансии #{vac_id}", 0)
-        bot.answer_callback_query(call.id, "Статус вакансии успешно изменен!")
-        status_str = "🟢 Открыта (Видна игрокам)" if vac[3] == 1 else "🔴 Закрыта (Скрыта от игроков)"
-        text = f"💼 <b>Управление вакансией #{vac[0]}</b>\n\n<b>Название:</b> {vac[1]}\n<b>Текущий статус:</b> {status_str}\n\n<b>Описание и требования:</b>\n{vac[2]}"
+        bot.answer_callback_query(call.id, "Статус номенклатуры обновлен.")
+        status_str = "🟢 НАБОР АКТИВЕН (Отображается)" if vac[3] == 1 else "🔴 НАБОР ПРИОСТАНОВЛЕН (Скрыт)"
+        text = f"💼 <b>НОМЕНКЛАТУРА #{vac[0]}</b>\n\n<b>Должность:</b> {vac[1]}\n<b>Системный статус:</b> {status_str}\n\n<b>Утвержденные требования:</b>\n{vac[2]}"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_single_vac_manage_kb(vac_id))
     elif action == 'vacdel':
         delete_vacancy(vac_id)
-        log_admin_action(call.from_user.id, admin_name, f"Удалил вакансию #{vac_id}", 0)
-        bot.answer_callback_query(call.id, "Вакансия удалена!")
-        bot.edit_message_text("📋 <b>СПИСОК ВСЕХ ВАКАНСИЙ СИСТЕМЫ:</b>\nВыберите вакансию для управления её статусом или удаления:", call.message.chat.id, call.message.message_id, reply_markup=get_vacancies_list_kb())
+        log_admin_action(call.from_user.id, admin_name, f"Ликвидировал вакансию #{vac_id}", 0)
+        bot.answer_callback_query(call.id, "Должность ликвидирована.")
+        bot.edit_message_text("📋 <b>РЕЕСТР ДОЛЖНОСТЕЙ И ВАКАНСИЙ:</b>", call.message.chat.id, call.message.message_id, reply_markup=get_vacancies_list_kb())
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
 def handle_admin_callbacks(call):
@@ -385,10 +405,10 @@ def handle_admin_callbacks(call):
     action = call.data.split('_')[1]
     
     if action == 'vac':
-        bot.edit_message_text("💼 <b>УПРАВЛЕНИЕ КАДРОВЫМ ОТДЕЛОМ (Мульти-вакансии)</b>\nЗдесь вы можете добавлять новые должности, временно закрывать их от игроков или удалять.", call.message.chat.id, call.message.message_id, reply_markup=get_vac_admin_menu_kb())
+        bot.edit_message_text("💼 <b>УПРАВЛЕНИЕ КАДРОВЫМ РЕЗЕРВОМ</b>\nФормирование штатного расписания, утверждение должностей и открытие наборов.", call.message.chat.id, call.message.message_id, reply_markup=get_vac_admin_menu_kb())
     elif action == 'stats':
         t_users, b_users, t_tickets = get_stats()
-        text = f"📊 <b>Аналитический отчет DragPolit:</b>\n\n👥 Зарегистрировано в базе: <b>{t_users}</b>\n⛔️ Заблокированных субьектов: <b>{b_users}</b>\n📩 Обработано обращений: <b>{t_tickets}</b>"
+        text = f"📊 <b>СВОДКА АНАЛИТИЧЕСКОГО ЦЕНТРА:</b>\n\n👥 Субъектов в базе: <b>{t_users}</b>\n⛔️ Профилей заблокировано: <b>{b_users}</b>\n📩 Тикетов обработано: <b>{t_tickets}</b>"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_admin_kb())
     elif action == 'export':
         data = get_full_users_data()
@@ -397,24 +417,24 @@ def handle_admin_callbacks(call):
             status = "[ЗАБЛОКИРОВАН]" if r[3] == 1 else "[АКТИВЕН]"
             content += f"ID: {r[0]} | Субъект: {r[1]} | Регистрация: {r[2]} | Статус: {status}\n"
         with open("dragpolit_users.txt", "w", encoding="utf-8") as f: f.write(content)
-        with open("dragpolit_users.txt", "rb") as f: bot.send_document(call.message.chat.id, f, caption="📁 Полный реестр пользователей")
+        with open("dragpolit_users.txt", "rb") as f: bot.send_document(call.message.chat.id, f, caption="📁 Экспорт Реестра субъектов завершен.")
     elif action == 'history':
         content = get_history_export()
         with open("dragpolit_tickets.txt", "w", encoding="utf-8") as f: f.write(content)
-        with open("dragpolit_tickets.txt", "rb") as f: bot.send_document(call.message.chat.id, f, caption="🗂 Официальный журнал обращений")
+        with open("dragpolit_tickets.txt", "rb") as f: bot.send_document(call.message.chat.id, f, caption="🗂 Экспорт Архива обращений завершен.")
     elif action == 'audit':
         content = get_audit_export()
         with open("dragpolit_audit.txt", "w", encoding="utf-8") as f: f.write(content)
-        with open("dragpolit_audit.txt", "rb") as f: bot.send_document(call.message.chat.id, f, caption="🛡 Служебный аудит руководства")
+        with open("dragpolit_audit.txt", "rb") as f: bot.send_document(call.message.chat.id, f, caption="🛡 Экспорт Журнала аудита завершен.")
     elif action == 'broadcast':
         user_states[call.message.chat.id] = {'state': 'waiting_broadcast'}
-        bot.edit_message_text("📢 <b>Подготовка официального оповещения:</b>\nОтправьте текст или медиаматериал для массовой рассылки по всем субъектам системы:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
+        bot.edit_message_text("📢 <b>ПРОТОКОЛ МАССОВОГО ОПОВЕЩЕНИЯ:</b>\nВведите текст или прикрепите медиафайл для рассылки всем субъектам системы:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
     elif action == 'ban':
         user_states[call.message.chat.id] = {'state': 'waiting_ban'}
-        bot.edit_message_text("⛔️ <b>Процедура блокировки:</b>\nВведите системный ID пользователя для бессрочного ограничения доступа:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
+        bot.edit_message_text("⛔️ <b>ПРОЦЕДУРА ОГРАНИЧЕНИЯ ДОСТУПА:</b>\nВведите системный ID субъекта для бессрочной блокировки:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
     elif action == 'unban':
         user_states[call.message.chat.id] = {'state': 'waiting_unban'}
-        bot.edit_message_text("✅ <b>Процедура реабилитации:</b>\nВведите системный ID пользователя для восстановления доступа:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
+        bot.edit_message_text("✅ <b>ПРОЦЕДУРА РЕАБИЛИТАЦИИ:</b>\nВведите системный ID субъекта для снятия ограничений:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith(('ans_', 'close_', 'tban_')))
 def handle_ticket_actions(call):
@@ -426,20 +446,20 @@ def handle_ticket_actions(call):
     
     if action == 'ans':
         user_states[call.message.chat.id] = {'state': 'typing_reply', 'target': target_id}
-        bot.send_message(call.message.chat.id, f"📨 <b>Подготовка официального ответа</b>\nРеспондент ID: <code>{target_id}</code>\n<i>Введите текст ответа:</i>", reply_markup=get_cancel_kb())
+        bot.send_message(call.message.chat.id, f"📨 <b>ФОРМИРОВАНИЕ ОФИЦИАЛЬНОГО ОТВЕТА</b>\nАдресат ID: <code>{target_id}</code>\n<i>Введите текст резолюции:</i>", reply_markup=get_cancel_kb())
         bot.answer_callback_query(call.id)
     elif action == 'close':
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-        log_admin_action(call.from_user.id, admin_name, "Закрыл тикет в архив", target_id)
+        log_admin_action(call.from_user.id, admin_name, "Переместил тикет в архив", target_id)
         notify_other_owners(call.from_user.id, f"Руководитель {admin_name} закрыл тикет от субъекта ID <code>{target_id}</code>.")
-        bot.answer_callback_query(call.id, "Обращение архивировано!")
+        bot.answer_callback_query(call.id, "Тикет заархивирован.")
     elif action == 'tban':
         set_ban_status(target_id, 1)
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
         log_admin_action(call.from_user.id, admin_name, "Заблокировал субъекта", target_id)
-        notify_other_owners(call.from_user.id, f"⚠️ Руководитель {admin_name} применил блокировку к субъекту ID <code>{target_id}</code>.")
-        bot.send_message(call.message.chat.id, f"⛔️ Субъект <code>{target_id}</code> внесен в черный список.")
-        bot.answer_callback_query(call.id, "Блокировка применена!")
+        notify_other_owners(call.from_user.id, f"⚠️ Руководитель {admin_name} инициировал блокировку субъекта ID <code>{target_id}</code>.")
+        bot.send_message(call.message.chat.id, f"⛔️ Субъект <code>{target_id}</code> успешно изолирован от системы.")
+        bot.answer_callback_query(call.id, "Санкции применены.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith(('type_', 'pubvac_', 'applystart_')))
 def handle_main_menu(call):
@@ -450,8 +470,8 @@ def handle_main_menu(call):
         vac_id = int(call.data.split('_')[1])
         vac = get_vacancy(vac_id)
         if not vac or vac[3] == 0:
-            return bot.answer_callback_query(call.id, "Эта вакансия уже закрыта!", show_alert=True)
-        text = f"🏛 <b>КАДРОВЫЙ ОТДЕЛ DRAGPOLIT</b>\n\n💼 <b>ВАКАНСИЯ: {vac[1].upper()}</b>\n\n{vac[2]}"
+            return bot.answer_callback_query(call.id, "Набор на данную должность приостановлен.", show_alert=True)
+        text = f"🏛 <b>ДЕПАРТАМЕНТ КАДРОВ DRAGPOLIT</b>\n\n💼 <b>ВАКАНСИЯ: {vac[1].upper()}</b>\n\n{vac[2]}"
         return bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_apply_confirm_kb(vac_id))
 
     if call.data.startswith('applystart_'):
@@ -459,19 +479,19 @@ def handle_main_menu(call):
         vac = get_vacancy(vac_id)
         vac_title = vac[1] if vac else "Неизвестная должность"
         user_states[call.message.chat.id] = {'state': 'apply_step_1', 'vac_title': vac_title, 'answers': {}}
-        return bot.edit_message_text(f"📋 <b>Анкетирование на должность «{vac_title}» (Этап 1 из 3):</b>\nУкажите ваши паспортные данные: Имя и реальный Возраст:", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
+        return bot.edit_message_text(f"📋 <b>Регистрация заявления на должность «{vac_title}» (Этап 1 из 3):</b>\nУкажите ваши паспортные данные (Имя и реальный Возраст):", call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
 
     action = call.data.split('_')[1]
     
-    # НОВЕ: Жалоба на звичайного ігрока (Автовідповідь без турбування вищого керівництва)
+    # Регламент обработки жалоб на игроков
     if action == 'playerreport':
         info_text = (
-            "👤 <b>РЕГЛАМЕНТ ПОДАЧИ ЖАЛОБ НА ИГРОКОВ</b>\n\n"
-            "Высшее руководство DragPolit не занимается рассмотрением бытовых жалоб на обычных игроков или нарушений правил чата/игрового процесса в данном портале.\n\n"
-            "👉 <b>Для подачи жалобы на игрока:</b>\n"
-            "1. Воспользуйтесь внутриигровым репортом на сервере.\n"
-            "2. Обратитесь в личные сообщения к действующему дежурному модератору в официальных каналах связи.\n\n"
-            "<i>Высшее руководство рассматривает исключительно жалобы на неправомерные действия самой администрации проекта.</i>"
+            "⚖️ <b>РЕГЛАМЕНТ ОБРАБОТКИ ЖАЛОБ НА ИГРОКОВ</b>\n\n"
+            "Высшее руководство DragPolit не занимается рассмотрением первичных нарушений правил чата или игрового процесса в данном терминале.\n\n"
+            "👉 <b>Алгоритм подачи жалобы на игрока:</b>\n"
+            "1. Воспользуйтесь внутриигровой системой обращений (репорт) на сервере.\n"
+            "2. Обратитесь в личные сообщения к действующему дежурному модератору.\n\n"
+            "<i>Данная приемная предназначена исключительно для жалоб на неправомерные действия самой администрации.</i>"
         )
         return bot.edit_message_text(info_text, call.message.chat.id, call.message.message_id, reply_markup=get_start_kb())
 
@@ -479,20 +499,20 @@ def handle_main_menu(call):
         active_vacs = get_all_vacancies(only_active=True)
         if not active_vacs:
             closed_text = (
-                "🏛 <b>КАДРОВЫЙ ОТДЕЛ DRAGPOLIT</b>\n\n"
-                "🔴 <b>ОТКРЫТЫХ ВАКАНСИЙ НЕТ / НАБОР ЗАКРЫТ</b>\n\n"
-                "На текущий момент штат администрации и модерации проекта полностью укомплектован. Прием новых анкет временно приостановлен руководством.\n\n"
-                "<i>Следите за новостями проекта, чтобы не пропустить открытие следующей волны набора.</i>"
+                "🏛 <b>ДЕПАРТАМЕНТ КАДРОВ DRAGPOLIT</b>\n\n"
+                "🔴 <b>НАБОР ПРИОСТАНОВЛЕН</b>\n\n"
+                "На текущий момент штатное расписание администрации и модерации укомплектовано. Прием новых заявлений временно закрыт.\n\n"
+                "<i>Отслеживайте официальные информационные ресурсы проекта для получения уведомлений об открытии вакансий.</i>"
             )
             return bot.edit_message_text(closed_text, call.message.chat.id, call.message.message_id, reply_markup=get_start_kb())
         else:
-            text = "🏛 <b>КАДРОВЫЙ ОТДЕЛ DRAGPOLIT</b>\n\nВ настоящий момент открыты следующие вакансии. Выберите интересующую должность для ознакомления с требованиями:"
+            text = "🏛 <b>ДЕПАРТАМЕНТ КАДРОВ DRAGPOLIT</b>\n\nДоступен перечень открытых вакансий. Выберите должность для ознакомления с должностными инструкциями:"
             return bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_public_vacancies_kb())
 
-    elif action == 'adminreport': text, cat = "⚖️ <b>Жалоба на Администрацию:</b>\nУкажите никнейм администратора, дату/время инцидента и подробно опишите суть неправомерных действий (желательно прикрепить доказательства):", "Жалоба на Администрацию"
-    elif action == 'bug': text, cat = "🛠 <b>Технический регламент:</b>\nПодробно опишите выявленный сбой:\n1. Суть ошибки\n2. Локация/механика\n3. Способ воспроизведения", "Технический отдел"
-    elif action == 'urgent': text, cat = "🚨 <b>Экстренный регламент:</b>\nИзложите суть критической ситуации или сбоя. Запрос будет рассмотрен руководством в приоритетном порядке.", "Экстренное обращение"
-    elif action == 'collab': text, cat = "🤝 <b>Коммерческий регламент:</b>\nИзложите суть коммерческого предложения с указанием контактов для связи.", "Партнерский отдел"
+    elif action == 'adminreport': text, cat = "🛡 <b>Департамент контроля Администрации:</b>\nУкажите никнейм сотрудника администрации, дату/время инцидента и подробно аргументируйте суть неправомерных действий (наличие доказательств обязательно):", "Жалоба на Администрацию"
+    elif action == 'bug': text, cat = "🛠 <b>Технический департамент:</b>\nЗадокументируйте выявленный сбой по форме:\n1. Суть аномалии\n2. Локация/механика\n3. Алгоритм воспроизведения", "Технический отдел"
+    elif action == 'urgent': text, cat = "🚨 <b>Экстренное реагирование:</b>\nСформулируйте суть критической угрозы для проекта. Обращение будет проиндексировано с наивысшим приоритетом.", "Экстренное обращение"
+    elif action == 'collab': text, cat = "🤝 <b>Коммерческий департамент:</b>\nИзложите суть партнерского или коммерческого предложения, прикрепив контактные данные лица, принимающего решения.", "Партнерский отдел"
         
     user_states[call.message.chat.id] = {'state': 'waiting_ticket', 'category': cat}
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=get_cancel_kb())
@@ -506,56 +526,60 @@ def handle_all_messages(message):
     state = state_data.get('state')
     admin_name = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
 
+    # ДОБАВЛЕНИЕ ВАКАНСИИ
     if message.chat.id in OWNERS and state == 'addvac_title':
         if not message.text:
-            return bot.send_message(message.chat.id, "❌ Отправьте название текстом.")
+            return bot.send_message(message.chat.id, "❌ Формат не поддерживается. Требуется текстовое наименование.")
         user_states[message.chat.id] = {'state': 'addvac_desc', 'title': message.text}
-        return bot.send_message(message.chat.id, f"➕ Название: <b>«{message.text}»</b>\n\n👉 Теперь следующим сообщением отправьте <b>описание и требования</b> к кандидатам на эту должность:", reply_markup=get_cancel_kb())
+        return bot.send_message(message.chat.id, f"➕ Должность: <b>«{message.text}»</b>\n\n👉 Утвердите должностные инструкции и требования к кандидатам:", reply_markup=get_cancel_kb())
 
     if message.chat.id in OWNERS and state == 'addvac_desc':
         if not message.text:
-            return bot.send_message(message.chat.id, "❌ Отправьте описание текстом.")
+            return bot.send_message(message.chat.id, "❌ Формат не поддерживается. Требуется текстовое описание.")
         title = state_data['title']
         add_vacancy(title, message.text)
         user_states.pop(message.chat.id)
-        log_admin_action(message.from_user.id, admin_name, f"Создал вакансию «{title}»", 0)
-        notify_other_owners(message.from_user.id, f"Руководитель {admin_name} добавил новую вакансию «{title}».")
-        return bot.send_message(message.chat.id, f"✅ <b>Вакансия «{title}» успешно создана и открыта для игроков!</b>", reply_markup=get_admin_kb())
+        log_admin_action(message.from_user.id, admin_name, f"Утвердил должность «{title}»", 0)
+        notify_other_owners(message.from_user.id, f"Руководитель {admin_name} утвердил новую должность: «{title}».")
+        return bot.send_message(message.chat.id, f"✅ <b>Должность «{title}» успешно внесена в реестр и опубликована!</b>", reply_markup=get_admin_kb())
 
+    # ОТВЕТ РУКОВОДСТВА
     if message.chat.id in OWNERS and state == 'typing_reply':
         target_id = state_data['target']
         user_states.pop(message.chat.id)
         reply_text = message.text if message.text else "[Прикрепленный медиаматериал]"
         log_message(target_id, 'out', reply_text)
         log_admin_action(message.from_user.id, admin_name, f"Ответил: {reply_text[:30]}...", target_id)
-        notify_other_owners(message.from_user.id, f"Руководитель {admin_name} направил ответ субъекту <code>{target_id}</code>:\n<i>«{reply_text}»</i>")
+        notify_other_owners(message.from_user.id, f"Руководитель {admin_name} направил резолюцию субъекту <code>{target_id}</code>:\n<i>«{reply_text}»</i>")
         
-        official_header = "🏛 <b>ОФИЦИАЛЬНЫЙ ОТВЕТ РУКОВОДСТВА DRAGPOLIT</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        official_header = "🏛 <b>ОФИЦИАЛЬНАЯ РЕЗОЛЮЦИЯ РУКОВОДСТВА DRAGPOLIT</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         try:
             if message.content_type == 'text':
                 bot.send_message(target_id, official_header + message.text.replace('<', '&lt;').replace('>', '&gt;'))
             else:
                 bot.send_message(target_id, official_header)
                 bot.copy_message(target_id, message.chat.id, message.message_id)
-            bot.send_message(message.chat.id, "✅ Официальный ответ успешно доставлен адресату.")
+            bot.send_message(message.chat.id, "✅ Резолюция успешно доставлена адресату.")
         except Exception:
-            bot.send_message(message.chat.id, "⚠️ Сбой доставки: пользователь заблокировал портал поддержки.")
+            bot.send_message(message.chat.id, "⚠️ Ошибка маршрутизации: профиль адресата недоступен.")
         return
 
+    # МАССОВАЯ РАССЫЛКА
     if message.chat.id in OWNERS and state == 'waiting_broadcast':
         user_states.pop(message.chat.id)
         users = get_all_users()
         success = 0
-        bot.send_message(message.chat.id, "⏳ Инициирована массовая рассылка протокола...")
+        bot.send_message(message.chat.id, "⏳ Инициализация рассылки. Пожалуйста, ожидайте...")
         for uid in users:
             try:
                 bot.copy_message(uid, message.chat.id, message.message_id)
                 success += 1
             except Exception: pass
-        log_admin_action(message.from_user.id, admin_name, f"Запустил рассылку на {success} чел.", 0)
-        notify_other_owners(message.from_user.id, f"📢 Руководитель {admin_name} произвел массовую рассылку. Доставлено: {success} субъектам.")
-        return bot.send_message(message.chat.id, f"✅ Официальное оповещение доставлено: {success} субъектам.")
+        log_admin_action(message.from_user.id, admin_name, f"Рассылка на {success} чел.", 0)
+        notify_other_owners(message.from_user.id, f"📢 Руководитель {admin_name} инициировал массовое оповещение ({success} субъектов).")
+        return bot.send_message(message.chat.id, f"✅ Протокол оповещения выполнен. Покрытие: {success} субъектов.")
 
+    # БЛОКИРОВКА ВРУЧНУЮ
     if message.chat.id in OWNERS and state in ['waiting_ban', 'waiting_unban']:
         user_states.pop(message.chat.id)
         try:
@@ -563,26 +587,28 @@ def handle_all_messages(message):
             is_ban = (state == 'waiting_ban')
             set_ban_status(target_id, 1 if is_ban else 0)
             status_text = "заблокирован ⛔️" if is_ban else "восстановлен в правах ✅"
-            act_text = "Заблокировал (вручную)" if is_ban else "Разблокировал (вручную)"
+            act_text = "Изоляция профиля" if is_ban else "Реабилитация профиля"
             log_admin_action(message.from_user.id, admin_name, act_text, target_id)
-            notify_other_owners(message.from_user.id, f"Руководитель {admin_name} изменил статус субъекта <code>{target_id}</code>: {status_text}.")
-            return bot.send_message(message.chat.id, f"Субъект <code>{target_id}</code> {status_text}.", reply_markup=get_admin_kb())
+            notify_other_owners(message.from_user.id, f"Руководитель {admin_name} изменил статус допуска субъекта <code>{target_id}</code>: {status_text}.")
+            return bot.send_message(message.chat.id, f"Допуск субъекта <code>{target_id}</code>: {status_text}.", reply_markup=get_admin_kb())
         except ValueError:
-            return bot.send_message(message.chat.id, "❌ Ошибка: системный ID должен состоять исключительно из цифр.", reply_markup=get_admin_kb())
+            return bot.send_message(message.chat.id, "❌ Формат не поддерживается. Требуется цифровой ID.", reply_markup=get_admin_kb())
 
+    # ИГНОР БАНА
     if is_banned(message.chat.id): return
 
+    # АНКЕТИРОВАНИЕ
     if state and state.startswith('apply_step_'):
         if not message.text:
-            return bot.send_message(message.chat.id, "⚠️ Ошибка регламента: на данном этапе требуется текстовый ответ.")
+            return bot.send_message(message.chat.id, "⚠️ Нарушение протокола заполнения: ожидается текстовый ввод.")
         if state == 'apply_step_1':
             user_states[message.chat.id]['answers']['name_age'] = message.text
             user_states[message.chat.id]['state'] = 'apply_step_2'
-            return bot.send_message(message.chat.id, "📋 <b>Анкетирование (Этап 2 из 3):</b>\nУкажите ваш послужной список (опыт на RP-проектах) и почему вы подходите:")
+            return bot.send_message(message.chat.id, "📋 <b>Анкетирование (Этап 2 из 3):</b>\nУкажите ваш послужной список (опыт администрирования на RP-проектах) и аргументируйте вашу кандидатуру:")
         elif state == 'apply_step_2':
             user_states[message.chat.id]['answers']['experience'] = message.text
             user_states[message.chat.id]['state'] = 'apply_step_3'
-            return bot.send_message(message.chat.id, "📋 <b>Анкетирование (Этап 3 из 3):</b>\nУкажите точное количество часов суточного онлайна:")
+            return bot.send_message(message.chat.id, "📋 <b>Анкетирование (Этап 3 из 3):</b>\nУкажите гарантированное количество часов суточного онлайна:")
         elif state == 'apply_step_3':
             answers = user_states[message.chat.id]['answers']
             vac_title = state_data.get('vac_title', 'Стажер')
@@ -590,31 +616,31 @@ def handle_all_messages(message):
             username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.chat.id}"
             
             app_header = (
-                f"📋 <b>ЗАЯВКА НА ВАКАНСИЮ: «{vac_title.upper()}»</b>\n"
+                f"📋 <b>ЗАЯВЛЕНИЕ НА ДОЛЖНОСТЬ: «{vac_title.upper()}»</b>\n"
                 f"👤 Кандидат: {username}\n"
                 f"🔑 Системный ID: <code>{message.chat.id}</code>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"<b>1. Паспортные данные:</b> {answers['name_age']}\n"
-                f"<b>2. Послужной список:</b> {answers['experience']}\n"
-                f"<b>3. Гарантированный онлайн:</b> {message.text}"
+                f"<b>1. Идентификация:</b> {answers['name_age']}\n"
+                f"<b>2. Компетенции:</b> {answers['experience']}\n"
+                f"<b>3. Заявленный онлайн:</b> {message.text}"
             )
-            log_message(message.chat.id, 'in', f"[Анкета на должность «{vac_title}»]")
+            log_message(message.chat.id, 'in', f"[Заявление: {vac_title}]")
             inc_ticket_count()
             
             for owner in OWNERS:
                 try: bot.send_message(owner, app_header, reply_markup=get_ticket_action_kb(message.chat.id))
                 except Exception: pass
-            return bot.send_message(message.chat.id, "✅ <b>Анкета зарегистрирована.</b> Данные переданы на рассмотрение руководству Кадрового отдела DragPolit.")
+            return bot.send_message(message.chat.id, "✅ <b>Заявление зарегистрировано.</b> Данные переданы на рассмотрение руководству Кадрового департамента DragPolit.")
 
-    # ПРИЕМ ТИКЕТОВ И ОБЩИЙ ПОТОК (ОТ ИГРОКОВ)
+    # ОБЩИЙ ПОТОК (ИГРОКИ)
     if message.chat.id not in OWNERS:
-        category = "💬 Общий поток (Без классификации)"
+        category = "💬 Общий поток (Не классифицировано)"
         if state == 'waiting_ticket':
             category = user_states[message.chat.id]['category']
             user_states.pop(message.chat.id)
-            bot.send_message(message.chat.id, "✅ <b>Обращение зарегистрировано.</b> Тикет передан высшему руководству. Ожидайте решения.")
+            bot.send_message(message.chat.id, "✅ <b>Обращение зарегистрировано.</b> Тикет сформирован и передан высшему руководству на рассмотрение.")
         else:
-            bot.send_message(message.chat.id, "ℹ️ Ваше сообщение принято системой. Для точной маршрутизации запроса рекомендуем использовать официальное меню: /start")
+            bot.send_message(message.chat.id, "ℹ️ Система зафиксировала входящий пакет данных. Для маршрутизации обращения в профильный департамент используйте меню: /start")
             
         username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
         header = (
@@ -635,9 +661,17 @@ def handle_all_messages(message):
                     bot.send_message(owner, header)
                     bot.copy_message(owner, message.chat.id, message.message_id, reply_markup=get_ticket_action_kb(message.chat.id))
             except Exception: pass
-    # НОВЕ: Відповідь Власнику, якщо він пише просто так без меню
+            
+    # ОТВЕТ ВЛАДЕЛЬЦУ (ЕСЛИ ОН ПРОСТО ПИШЕТ В БОТА)
     else:
-        bot.send_message(message.chat.id, "👑 <b>Система DragPolit в строю!</b>\nБосс, я распознал вас как руководителя высшего звена, поэтому я не создаю тикет от вашего имени.\n\n👉 Для входа в терминал управления введите команду: /admin\n👉 Для просмотра меню игрока нажмите: /start")
+        status_msg = (
+            "🔐 <b>СИСТЕМА УПРАВЛЕНИЯ DRAGPOLIT</b>\n\n"
+            "Статус: <b>Доступ подтвержден (Высшее руководство)</b>\n\n"
+            "Служебный режим активирован. Свободные текстовые сообщения от вашего имени не регистрируются как тикеты.\n\n"
+            "• Для доступа к панели управления: /admin\n"
+            "• Для просмотра клиентского интерфейса: /start"
+        )
+        bot.send_message(message.chat.id, status_msg)
 
 # ==========================================
 # 8. БЕЗПЕРЕБОЙНЫЙ ЗАПУСК СЕРВЕРА
@@ -654,7 +688,7 @@ def start_bot():
     except Exception: pass
     while True:
         try:
-            print("🏛 Сервер DragPolit Enforcement подключен к шлюзам Telegram...")
+            print("🏛 ERP-система DragPolit подключена к серверам Telegram...")
             bot.infinity_polling(timeout=10, long_polling_timeout=5, none_stop=True)
         except Exception as e:
             time.sleep(5)
