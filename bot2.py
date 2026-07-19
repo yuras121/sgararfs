@@ -2,27 +2,27 @@ import os
 import sqlite3
 import telebot
 import sys
-import time
 from telebot import types
 from datetime import datetime
 from threading import Lock
 
 # ==========================================
-# 1. СИСТЕМНОЕ ЯДРО
+# 1. КОНФИГУРАЦИЯ И КОМАНДА
 # ==========================================
 TOKEN = os.environ.get('TOKEN')
+# Список Высшего Руководства (все видят действия друг друга)
 OWNERS = [1614259542, 7716987740, 1751927856] 
 
 if not TOKEN:
-    print("❌ ТОКЕН НЕ НАЙДЕН")
+    print("❌ ОШИБКА: TOKEN не установлен!")
     sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 db_lock = Lock()
-DB_FILE = 'dragpolit_enterprise_v7.db'
+DB_FILE = 'dragpolit_enterprise_v8.db'
 
 # ==========================================
-# 2. БАЗА ДАННЫХ (SYNC ARCHITECTURE)
+# 2. БАЗА ДАННЫХ
 # ==========================================
 def db_query(sql, params=(), fetch=False, commit=False):
     with db_lock:
@@ -35,177 +35,156 @@ def db_query(sql, params=(), fetch=False, commit=False):
             return res
 
 def init_db():
-    # Субъекты
-    db_query('''CREATE TABLE IF NOT EXISTS subjects (
-        uid INTEGER PRIMARY KEY, username TEXT, lang TEXT DEFAULT 'ru', 
-        state TEXT DEFAULT 'IDLE', banned INTEGER DEFAULT 0, note TEXT)''', commit=True)
-    # Глобальный реестр админ-сообщений (чтобы бот мог их удалять/редактировать у всех)
-    db_query('''CREATE TABLE IF NOT EXISTS admin_msgs (
-        ticket_id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        user_uid INTEGER, 
-        msg_json TEXT)''', commit=True) # msg_json хранит "admin_id:msg_id" для всех админов
-    # Логи действий
-    db_query('''CREATE TABLE IF NOT EXISTS admin_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, aid INTEGER, action TEXT, target INTEGER, ts TEXT)''', commit=True)
-    # FAQ
+    db_query('''CREATE TABLE IF NOT EXISTS subjects 
+                (uid INTEGER PRIMARY KEY, username TEXT, lang TEXT DEFAULT 'ru', banned INTEGER DEFAULT 0, note TEXT)''', commit=True)
+    db_query('''CREATE TABLE IF NOT EXISTS admin_msgs 
+                (t_id INTEGER PRIMARY KEY AUTOINCREMENT, user_uid INTEGER, msg_map TEXT)''', commit=True)
     db_query('''CREATE TABLE IF NOT EXISTS faq (id INTEGER PRIMARY KEY AUTOINCREMENT, q TEXT, a TEXT)''', commit=True)
 
 init_db()
 
 # ==========================================
-# 3. ЛОГИКА СИНХРОНИЗАЦИИ (UI UPDATE)
+# 3. СЛУЖБА СИНХРОНИЗАЦИИ (TEAM SYNC)
 # ==========================================
-def broadcast_admin_update(user_uid, status_text, ticket_id=None):
-    """ Находит все копии сообщения у админов и редактирует их """
-    if not ticket_id:
-        res = db_query("SELECT msg_json, ticket_id FROM admin_msgs WHERE user_uid = ? ORDER BY ticket_id DESC LIMIT 1", (user_uid,), fetch=True)
-    else:
-        res = db_query("SELECT msg_json, ticket_id FROM admin_msgs WHERE ticket_id = ?", (ticket_id,), fetch=True)
-    
+def sync_admin_action(sender_id, target_uid, content_msg, is_reply=True):
+    """ Рассылает копию ответа админа всем остальным участникам штаба """
+    sender_name = f"ID:{sender_id}"
+    for owner in OWNERS:
+        if owner == sender_id: continue # Самому себе не шлем повтор
+        
+        try:
+            status = "✍️ ОТВЕТ" if is_reply else "🔒 ЗАКРЫТИЕ"
+            header = f"📡 <b>СИНХРОНИЗАЦИЯ ШТАБА</b>\n{status} от админа <code>{sender_id}</code>\nАдресат: <code>{target_uid}</code>\n━━━━━━━━━━━━\n"
+            
+            if content_msg.content_type == 'text':
+                bot.send_message(owner, header + f"Текст: <i>{content_msg.text}</i>")
+            else:
+                bot.send_message(owner, header + f"Тип данных: {content_msg.content_type}")
+                bot.copy_message(owner, sender_id, content_msg.message_id)
+        except: pass
+
+def update_ui_status(t_id, status_text):
+    """ Меняет текст оригинального тикета у всех админов на статус 'Завершено' """
+    res = db_query("SELECT msg_map FROM admin_msgs WHERE t_id = ?", (t_id,), fetch=True)
     if res:
-        mapping = eval(res[0][0]) # Превращаем строку назад в словарь {admin_id: msg_id}
-        t_id = res[0][1]
+        mapping = eval(res[0][0])
         for aid, mid in mapping.items():
             try:
-                bot.edit_message_caption(
-                    chat_id=aid, 
-                    message_id=mid, 
-                    caption=f"📝 <b>СТАТУС ОБНОВЛЕН:</b>\n{status_text}\n━━━━━━━━━━━━\nTicket #{t_id}",
-                    reply_markup=None # Убираем кнопки
-                )
+                bot.edit_message_caption(chat_id=aid, message_id=mid, caption=status_text, reply_markup=None)
             except:
-                try:
-                    bot.edit_message_text(
-                        chat_id=aid, 
-                        message_id=mid, 
-                        text=f"📝 <b>СТАТУС ОБНОВЛЕН:</b>\n{status_text}\n━━━━━━━━━━━━\nTicket #{t_id}",
-                        reply_markup=None
-                    )
+                try: bot.edit_message_text(chat_id=aid, message_id=mid, text=status_text, reply_markup=None)
                 except: pass
 
 # ==========================================
-# 4. ИНТЕРФЕЙСЫ
+# 4. КЛАВИАТУРЫ
 # ==========================================
-def main_kb(uid):
+def main_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add("🛡 Жалоба", "⚙️ Тех-отдел", "💬 Связь")
-    kb.add("❓ FAQ", "🌍 English")
+    kb.add("❓ FAQ", "🌍 Language")
     return kb
 
-def admin_kb(u_id, t_id):
+def admin_control_kb(u_id, t_id):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("📩 Ответить", callback_data=f"ans_{u_id}_{t_id}"),
         types.InlineKeyboardButton("🔒 Архив", callback_data=f"arc_{u_id}_{t_id}"),
-        types.InlineKeyboardButton("👤 Профиль", callback_data=f"prof_{u_id}"),
+        types.InlineKeyboardButton("👤 Досье", callback_data=f"inf_{u_id}"),
         types.InlineKeyboardButton("⛔️ BAN", callback_data=f"ban_{u_id}")
     )
     return kb
 
 # ==========================================
-# 5. ХЕНДЛЕРЫ
+# 5. ОСНОВНАЯ ЛОГИКА
 # ==========================================
 @bot.message_handler(commands=['start'])
-def start(m):
-    res = db_query("SELECT banned FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)
-    if not res:
-        db_query("INSERT INTO subjects (uid, username) VALUES (?, ?)", (m.chat.id, m.from_user.username), commit=True)
-    elif res[0][0]: return bot.send_message(m.chat.id, "⛔️ Доступ ограничен.")
-    
-    bot.send_message(m.chat.id, "🏛 <b>Центральная Приемная DragPolit</b>", reply_markup=main_kb(m.chat.id))
+def h_start(m):
+    db_query("INSERT OR IGNORE INTO subjects (uid, username) VALUES (?, ?)", (m.chat.id, m.from_user.username), commit=True)
+    bot.send_message(m.chat.id, "🏛 <b>Приемная DragPolit</b>", reply_markup=main_kb())
 
 @bot.message_handler(commands=['admin'])
-def admin(m):
+def h_admin(m):
     if m.chat.id not in OWNERS: return
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("📢 Рассылка", callback_data="adm_mass"),
-           types.InlineKeyboardButton("📊 Отчет", callback_data="adm_rep"))
-    bot.send_message(m.chat.id, "🏛 <b>Терминал Координации</b>", reply_markup=kb)
+    bot.send_message(m.chat.id, "👑 <b>Терминал Координации</b>\nВы видите действия всех администраторов.")
 
-# --- Прием сообщений от игроков ---
-@bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'voice'])
-def handle_incoming(m):
-    if m.chat.id in OWNERS: return
+# Прием сообщений от пользователей
+@bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'voice', 'video_note'])
+def handle_user_msg(m):
+    if m.chat.id in OWNERS: return # Админы не создают тикеты сами себе
     
-    # Регистрация нового тикета
-    db_query("INSERT INTO admin_msgs (user_uid, msg_json) VALUES (?, ?)", (m.chat.id, "{}"), commit=True)
+    # Регистрация тикета для синхронизации
+    db_query("INSERT INTO admin_msgs (user_uid, msg_map) VALUES (?, ?)", (m.chat.id, "{}"), commit=True)
     t_id = db_query("SELECT last_insert_rowid()", fetch=True)[0][0]
     
-    header = f"📑 <b>НОВЫЙ ТИКЕТ #{t_id}</b>\nСубъект: @{m.from_user.username} (<code>{m.chat.id}</code>)\n\n"
-    
-    msg_map = {} # Здесь будем хранить {id_админа: id_сообщения}
+    header = f"📑 <b>ТИКЕТ #{t_id}</b>\nОт: @{m.from_user.username} (<code>{m.chat.id}</code>)\n━━━━━━━━━━━━\n"
+    msg_map = {}
+
     for aid in OWNERS:
         try:
             if m.content_type == 'text':
-                res = bot.send_message(aid, header + f"💬 <i>{m.text}</i>", reply_markup=admin_kb(m.chat.id, t_id))
+                r = bot.send_message(aid, header + f"💬 <i>{m.text}</i>", reply_markup=admin_control_kb(m.chat.id, t_id))
             else:
                 bot.send_message(aid, header)
-                res = bot.copy_message(aid, m.chat.id, m.message_id, reply_markup=admin_kb(m.chat.id, t_id))
-            msg_map[aid] = res.message_id
+                r = bot.copy_message(aid, m.chat.id, m.message_id, reply_markup=admin_control_kb(m.chat.id, t_id))
+            msg_map[aid] = r.message_id
         except: pass
     
-    # Сохраняем мапинг в базу, чтобы потом редактировать у всех
-    db_query("UPDATE admin_msgs SET msg_json = ? WHERE ticket_id = ?", (str(msg_map), t_id), commit=True)
-    bot.send_message(m.chat.id, "✅ Ваше сообщение передано в Штаб.")
+    db_query("UPDATE admin_msgs SET msg_map = ? WHERE t_id = ?", (str(msg_map), t_id), commit=True)
+    bot.send_message(m.chat.id, "✅ Сообщение передано Штабу.")
 
-# --- Коллбеки ---
+# Обработка действий админов
 @bot.callback_query_handler(func=lambda c: True)
-def callbacks(c):
+def h_callbacks(c):
     p = c.data.split('_')
-    act, uid = p[0], int(p[1])
+    action, uid = p[0], int(p[1])
     aid = c.from_user.id
     
-    if act == 'ans':
+    if action == 'ans':
         t_id = p[2]
-        msg = bot.send_message(c.message.chat.id, f"📝 Ответ для тикета #{t_id}:")
-        bot.register_next_step_handler(msg, step_reply, uid, t_id)
+        msg = bot.send_message(aid, f"📝 <b>ВАШ ОТВЕТ НА ТИКЕТ #{t_id}:</b>")
+        bot.register_next_step_handler(msg, step_admin_reply, uid, t_id)
         
-    elif act == 'arc':
+    elif action == 'arc':
         t_id = p[2]
-        broadcast_admin_update(uid, f"🔒 Закрыто админом <code>{aid}</code>", ticket_id=t_id)
-        db_query("INSERT INTO admin_logs (aid, action, target, ts) VALUES (?, ?, ?, ?)", 
-                 (aid, "CLOSED_TICKET", t_id, datetime.now().strftime("%H:%M")), commit=True)
+        update_ui_status(t_id, f"✅ <b>ЗАВЕРШЕНО</b>\nАрхивировано админом <code>{aid}</code>")
+        sync_admin_action(aid, uid, types.Message(0,None,None,None,None,None,None), is_reply=False)
 
-    elif act == 'ban':
-        db_query("UPDATE subjects SET banned = 1 WHERE uid = ?", (uid,), commit=True)
-        broadcast_admin_update(uid, f"⛔️ БАН выдан админом <code>{aid}</code>")
-        bot.answer_callback_query(c.id, "Субъект забанен", show_alert=True)
+    elif action == 'inf':
+        u = db_query("SELECT username, note FROM subjects WHERE uid = ?", (uid,), fetch=True)[0]
+        bot.send_message(aid, f"👤 @{u[0]}\nID: <code>{uid}</code>\nЗаметка: {u[1] or 'пусто'}\n\nНапишите новую заметку:")
+        bot.register_next_step_handler(c.message, step_save_note, uid)
 
-    elif act == 'prof':
-        res = db_query("SELECT note, username FROM subjects WHERE uid = ?", (uid,), fetch=True)[0]
-        bot.send_message(c.message.chat.id, f"👤 @{res[1]}\nID: <code>{uid}</code>\nЗаметка: {res[0] or 'нет'}\n\nНапишите новую заметку:")
-        bot.register_next_step_handler(c.message, step_note, uid)
-
-# --- Шаги админа ---
-def step_reply(m, uid, t_id):
+# Логика отправки ответа и синхронизации
+def step_admin_reply(m, uid, t_id):
     aid = m.from_user.id
     try:
-        header = "🏛 <b>ОТВЕТ АДМИНИСТРАЦИИ:</b>\n━━━━━━━━━━━━\n\n"
+        header = "🏛 <b>ОФИЦИАЛЬНАЯ РЕЗОЛЮЦИЯ:</b>\n━━━━━━━━━━━━\n\n"
         if m.content_type == 'text':
             bot.send_message(uid, header + m.text)
-            content = m.text
         else:
             bot.send_message(uid, header)
             bot.copy_message(uid, m.chat.id, m.message_id)
-            content = f"[{m.content_type}]"
         
-        # Обновляем сообщение у всех админов!
-        broadcast_admin_update(uid, f"✅ Ответил админ <code>{aid}</code>:\n<i>«{content[:40]}...»</i>", ticket_id=t_id)
+        # 1. Рассылаем копию ответа всем другим админам
+        sync_admin_action(aid, uid, m, is_reply=True)
         
-        # Лог
-        db_query("INSERT INTO admin_logs (aid, action, target, ts) VALUES (?, ?, ?, ?)", 
-                 (aid, f"REPLY_#{t_id}", uid, datetime.now().strftime("%H:%M")), commit=True)
-        bot.send_message(m.chat.id, "✅ Отправлено и синхронизировано.")
+        # 2. Обновляем статус кнопок у всех админов
+        txt = f"✅ <b>ОТВЕЧЕНО</b>\nАдмин <code>{aid}</code> дал ответ."
+        update_ui_status(t_id, txt)
+        
+        bot.send_message(aid, "✅ Ответ отправлен и синхронизирован с коллегами.")
     except:
-        bot.send_message(m.chat.id, "❌ Ошибка доставки.")
+        bot.send_message(aid, "❌ Ошибка отправки пользователю.")
 
-def step_note(m, uid):
+def step_save_note(m, uid):
     db_query("UPDATE subjects SET note = ? WHERE uid = ?", (m.text, uid), commit=True)
-    bot.send_message(m.chat.id, "✅ Заметка обновлена.")
+    bot.send_message(m.chat.id, "✅ Заметка обновлена в общей базе.")
 
 # ==========================================
 # 6. ЗАПУСК
 # ==========================================
 if __name__ == '__main__':
-    print("🏛 DRAGPOLIT SYNC MASTER ACTIVE")
+    print("------------------------------------")
+    print("🏛 DRAGPOLIT TEAM SYNC MASTER ONLINE")
+    print("------------------------------------")
     bot.infinity_polling()
