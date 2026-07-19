@@ -2,6 +2,7 @@ import os
 import sqlite3
 import telebot
 import sys
+import time
 from telebot import types
 from threading import Lock
 
@@ -9,16 +10,19 @@ from threading import Lock
 # 1. КОНФИГУРАЦИЯ И СЕРВЕРНЫЙ МАЯК
 # ==========================================
 TOKEN = os.environ.get('TOKEN')
+# Твой список админов
 OWNERS = [1614259542, 7716987740, 1751927856] 
 
 print("--- [STARTUP] DRAGPOLIT CORE: BILINGUAL SYSTEM ---", flush=True)
 
 if not TOKEN:
-    print("❌ ERROR: TOKEN NOT FOUND IN ENVIRONMENT VARIABLES", flush=True)
+    print("❌ ERROR: ТОКЕН НЕ ЗНАЙДЕНО В НАЛАШТУВАННЯХ DOKPLOY (Вкладка Environment)", flush=True)
+    time.sleep(60) # Тримаємо контейнер живим, щоб ти побачив помилку
     sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 db_lock = Lock()
+# Путь СТРОГО под твой Volume в Dokploy
 DB_FILE = '/app/dragpolit_enterprise_v5.db'
 
 # ==========================================
@@ -71,8 +75,6 @@ def init_db():
     db_op('''CREATE TABLE IF NOT EXISTS tickets (
         tid INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, category TEXT, status TEXT DEFAULT 'OPEN')''', commit=True)
 
-init_db()
-
 # ==========================================
 # 4. СИНХРОНИЗАЦИЯ ШТАБА (ADMIN SYNC)
 # ==========================================
@@ -83,8 +85,10 @@ def sync_with_admins(sender_id, target_uid, data, action="ANSWER"):
         try:
             head = f"📡 <b>SYNC: Админ <code>{sender_id}</code></b>\n🎯 Игрок: <code>{target_uid}</code>\nДействие: {action}\n━━━━━━━\n"
             
+            # Если передали просто текст (например, при бане)
             if isinstance(data, str):
                 bot.send_message(adm, head + f"Инфо: <i>{data}</i>")
+            # Если передали объект сообщения
             elif hasattr(data, 'content_type'):
                 if data.content_type == 'text':
                     bot.send_message(adm, head + f"Текст: <i>{data.text}</i>")
@@ -127,8 +131,7 @@ def h_start(m):
               (m.chat.id, m.from_user.username, lang), commit=True)
         u_lang = lang
     else:
-        if res[0][1]: 
-            return bot.send_message(m.chat.id, STRINGS[res[0][0]]['banned'])
+        if res[0][1]: return bot.send_message(m.chat.id, STRINGS[res[0][0]]['banned'])
         u_lang = res[0][0]
     
     db_op("UPDATE subjects SET state = 'IDLE' WHERE uid = ?", (m.chat.id,), commit=True)
@@ -170,8 +173,7 @@ def h_content(m):
 
     is_ticket = "SENDING" in u_state
     if not is_ticket:
-        # Если пользователь просто пишет без выбора категории - игнорируем или обрабатываем как флуд
-        return bot.send_message(m.chat.id, "❌ Пожалуйста, выберите департамент в меню через /start")
+        return bot.send_message(m.chat.id, "❌ Будь ласка, виберіть департамент у меню через /start")
 
     cat = u_state.split('|')[1]
     db_op("INSERT INTO tickets (uid, category) VALUES (?, ?)", (m.chat.id, cat), commit=True)
@@ -191,7 +193,7 @@ def h_content(m):
                 bot.send_message(adm, admin_header)
                 bot.copy_message(adm, m.chat.id, m.message_id, reply_markup=get_crm_kb(m.chat.id, t_id))
         except Exception as e:
-            print(f"❌ FAILED TO FORWARD TICKET TO ADMIN {adm}: {e}", flush=True)
+            print(f"❌ ПРОВАЛ ВІДПРАВКИ ТІКЕТА АДМІНУ {adm}: {e}", flush=True)
 
 # --- Коллбеки CRM ---
 @bot.callback_query_handler(func=lambda c: True)
@@ -214,8 +216,13 @@ def h_callbacks(c):
 
     elif action == 'ban': 
         db_op("UPDATE subjects SET banned = 1 WHERE uid = ?", (p[1],), commit=True)
-        sync_with_admins(c.from_user.id, p[1], "Пользователь внесен в черный список.", "BANNED")
+        sync_with_admins(c.from_user.id, p[1], "Користувач доданий у чорний список.", "BANNED")
         bot.answer_callback_query(c.id, "Заблокирован", show_alert=True)
+
+    elif action == 'cls':
+        db_op("UPDATE tickets SET status = 'CLOSED' WHERE tid = ?", (p[1],), commit=True)
+        bot.answer_callback_query(c.id, "Тикет закритий", show_alert=True)
+        bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=None)
 
 def step_reply(m, uid, tid):
     res = db_op("SELECT lang FROM subjects WHERE uid = ?", (uid,), fetch=True)
@@ -231,13 +238,20 @@ def step_reply(m, uid, tid):
         sync_with_admins(m.from_user.id, uid, m, f"ANSWER (Ticket #{tid})")
         bot.send_message(m.chat.id, "✅ Ответ доставлен и синхронизирован.")
     except Exception as e:
-        bot.send_message(m.chat.id, f"❌ Не доставлено (возможно, блок бота). Ошибка: {e}")
+        bot.send_message(m.chat.id, f"❌ Не доставлено (можливо, юзер заблокував бота). Помилка: {e}")
 
 def step_note(m, uid):
     db_op("UPDATE subjects SET note = ? WHERE uid = ?", (m.text, uid), commit=True)
     bot.send_message(m.chat.id, "✅ Заметка сохранена в CRM.")
 
 if __name__ == '__main__':
-    init_db()
-    print("--- [ONLINE] MASTER CORE LOADED ---", flush=True)
-    bot.infinity_polling()
+    try:
+        print("--- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---", flush=True)
+        init_db()
+        print("--- [ONLINE] MASTER CORE LOADED ---", flush=True)
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    except Exception as e:
+        print(f"❌ КРИТИЧНА ПОМИЛКА ПРИ ЗАПУСКУ БОТА: {e}", flush=True)
+        # Цей сліп тримає контейнер живим хвилину, щоб лог встиг відправитись в дашборд Dokploy
+        time.sleep(60) 
+        sys.exit(1)
