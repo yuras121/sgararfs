@@ -3,25 +3,22 @@ import sqlite3
 import telebot
 import sys
 from telebot import types
-from datetime import datetime
 from threading import Lock
 
 # ==========================================
 # 1. КОНФИГУРАЦИЯ И СЕРВЕРНЫЙ МАЯК
 # ==========================================
 TOKEN = os.environ.get('TOKEN')
-# Твой список админов
 OWNERS = [1614259542, 7716987740, 1751927856] 
 
-print("--- [STARTUP] DRAGPOLIT CORE: BILINGUAL SYSTEM ---")
+print("--- [STARTUP] DRAGPOLIT CORE: BILINGUAL SYSTEM ---", flush=True)
 
 if not TOKEN:
-    print("❌ ERROR: TOKEN NOT FOUND")
+    print("❌ ERROR: TOKEN NOT FOUND IN ENVIRONMENT VARIABLES", flush=True)
     sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 db_lock = Lock()
-# Путь СТРОГО под твой Volume в Dokploy
 DB_FILE = '/app/dragpolit_enterprise_v5.db'
 
 # ==========================================
@@ -64,7 +61,7 @@ def db_op(query, params=(), fetch=False, commit=False):
                 if commit: conn.commit()
                 return res
         except Exception as e:
-            print(f"❌ DATABASE ERROR: {e}")
+            print(f"❌ DATABASE ERROR: {e}", flush=True)
             return None
 
 def init_db():
@@ -79,25 +76,30 @@ init_db()
 # ==========================================
 # 4. СИНХРОНИЗАЦИЯ ШТАБА (ADMIN SYNC)
 # ==========================================
-def sync_with_admins(sender_id, target_uid, msg_obj, action="ANSWER"):
-    """ Рассылает уведомление всем админам о действии коллеги """
+def sync_with_admins(sender_id, target_uid, data, action="ANSWER"):
+    """ Рассылает уведомление всем админам. В data может быть Message или просто строка. """
     for adm in OWNERS:
         if adm == sender_id: continue
         try:
             head = f"📡 <b>SYNC: Админ <code>{sender_id}</code></b>\n🎯 Игрок: <code>{target_uid}</code>\nДействие: {action}\n━━━━━━━\n"
-            if msg_obj.content_type == 'text':
-                bot.send_message(adm, head + f"Текст: <i>{msg_obj.text}</i>")
-            else:
-                bot.send_message(adm, head + f"Медиа: {msg_obj.content_type}")
-                bot.copy_message(adm, sender_id, msg_obj.message_id)
-        except: pass
+            
+            if isinstance(data, str):
+                bot.send_message(adm, head + f"Инфо: <i>{data}</i>")
+            elif hasattr(data, 'content_type'):
+                if data.content_type == 'text':
+                    bot.send_message(adm, head + f"Текст: <i>{data.text}</i>")
+                else:
+                    bot.send_message(adm, head + f"Медиа: {data.content_type}")
+                    bot.copy_message(adm, sender_id, data.message_id)
+        except Exception as e:
+            print(f"❌ SYNC ERROR for admin {adm}: {e}", flush=True)
 
 # ==========================================
 # 5. UX: КЛАВИАТУРЫ
 # ==========================================
 def get_main_kb(uid):
-    u = db_op("SELECT lang FROM subjects WHERE uid = ?", (uid,), fetch=True)[0]
-    l = u[0]
+    res = db_op("SELECT lang FROM subjects WHERE uid = ?", (uid,), fetch=True)
+    l = res[0][0] if res else 'ru'
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add(STRINGS[l]['b_report'], STRINGS[l]['b_tech'], STRINGS[l]['b_other'])
     kb.add(STRINGS[l]['b_faq'], STRINGS[l]['b_lang'])
@@ -120,63 +122,67 @@ def get_crm_kb(uid, tid):
 def h_start(m):
     res = db_op("SELECT lang, banned FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)
     if not res:
-        # Пытаемся определить язык из настроек ТГ
         lang = 'en' if m.from_user.language_code != 'ru' else 'ru'
         db_op("INSERT INTO subjects (uid, uname, lang) VALUES (?, ?, ?)", 
               (m.chat.id, m.from_user.username, lang), commit=True)
+        u_lang = lang
     else:
-        if res[0][1]: return bot.send_message(m.chat.id, STRINGS[res[0][0]]['banned'])
+        if res[0][1]: 
+            return bot.send_message(m.chat.id, STRINGS[res[0][0]]['banned'])
+        u_lang = res[0][0]
     
     db_op("UPDATE subjects SET state = 'IDLE' WHERE uid = ?", (m.chat.id,), commit=True)
-    u_lang = db_op("SELECT lang FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)[0][0]
     bot.send_message(m.chat.id, STRINGS[u_lang]['welcome'], reply_markup=get_main_kb(m.chat.id))
 
 @bot.message_handler(commands=['admin'])
 def h_admin(m):
     if m.chat.id not in OWNERS: return
-    stats = db_op("SELECT COUNT(*) FROM subjects", fetch=True)[0][0]
+    stats_res = db_op("SELECT COUNT(*) FROM subjects", fetch=True)
+    stats = stats_res[0][0] if stats_res else 0
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("📢 Массовая рассылка", callback_data="adm_mass"))
     bot.send_message(m.chat.id, f"👑 <b>DRAGPOLIT COMMAND CENTER</b>\nСубъектов в базе: {stats}", reply_markup=kb)
 
-# --- Прием сообщений от игроков ---
 @bot.message_handler(func=lambda m: any(m.text in d.values() for d in STRINGS.values()))
 def h_menu(m):
-    u = db_op("SELECT lang, banned FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)[0]
-    if u[1]: return
+    res = db_op("SELECT lang, banned FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)
+    if not res or res[0][1]: return
+    u_lang = res[0][0]
 
-    # Переключение языка
     if m.text in [STRINGS['ru']['b_lang'], STRINGS['en']['b_lang']]:
-        new_l = 'en' if u[0] == 'ru' else 'ru'
+        new_l = 'en' if u_lang == 'ru' else 'ru'
         db_op("UPDATE subjects SET lang = ? WHERE uid = ?", (new_l, m.chat.id), commit=True)
         return bot.send_message(m.chat.id, "🌍 Done!", reply_markup=get_main_kb(m.chat.id))
 
-    # Справка
     if m.text in [STRINGS['ru']['b_faq'], STRINGS['en']['b_faq']]:
         return bot.send_message(m.chat.id, "<b>DragPolit Support</b>: panel.dragpolit.com")
 
-    # Режим ввода тикета
     db_op("UPDATE subjects SET state = ? WHERE uid = ?", (f"SENDING|{m.text}", m.chat.id), commit=True)
-    bot.send_message(m.chat.id, STRINGS[u[0]]['input'], reply_markup=types.ReplyKeyboardRemove())
+    bot.send_message(m.chat.id, STRINGS[u_lang]['input'], reply_markup=types.ReplyKeyboardRemove())
 
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'voice', 'video_note'])
 def h_content(m):
-    u = db_op("SELECT lang, banned, state FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)[0]
-    if u[1]: return
-    if m.chat.id in OWNERS and u[2] == 'IDLE': return # Игнорим свободные фразы админов
-
-    # Регистрация тикета
-    is_ticket = "SENDING" in u[2]
-    cat = u[2].split('|')[1] if is_ticket else "LIVE CHAT"
-    db_op("INSERT INTO tickets (uid, category) VALUES (?, ?)", (m.chat.id, cat), commit=True)
-    t_id = db_op("SELECT last_insert_rowid()", fetch=True)[0][0]
+    res = db_op("SELECT lang, banned, state FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)
+    if not res or res[0][1]: return
+    u_lang, _, u_state = res[0]
     
-    if is_ticket:
-        db_op("UPDATE subjects SET state = 'IDLE' WHERE uid = ?", (m.chat.id,), commit=True)
-        bot.send_message(m.chat.id, STRINGS[u[0]]['success'], reply_markup=get_main_kb(m.chat.id))
+    if m.chat.id in OWNERS and u_state == 'IDLE': return 
 
-    # Рассылка по Штабу
-    admin_header = f"📩 <b>{STRINGS[u[0]]['ticket_header']} #{t_id}</b> [{cat}]\n👤 @{m.from_user.username} (<code>{m.chat.id}</code>)\n━━━━━━━\n"
+    is_ticket = "SENDING" in u_state
+    if not is_ticket:
+        # Если пользователь просто пишет без выбора категории - игнорируем или обрабатываем как флуд
+        return bot.send_message(m.chat.id, "❌ Пожалуйста, выберите департамент в меню через /start")
+
+    cat = u_state.split('|')[1]
+    db_op("INSERT INTO tickets (uid, category) VALUES (?, ?)", (m.chat.id, cat), commit=True)
+    
+    tid_res = db_op("SELECT last_insert_rowid()", fetch=True)
+    t_id = tid_res[0][0] if tid_res else 0
+    
+    db_op("UPDATE subjects SET state = 'IDLE' WHERE uid = ?", (m.chat.id,), commit=True)
+    bot.send_message(m.chat.id, STRINGS[u_lang]['success'], reply_markup=get_main_kb(m.chat.id))
+
+    admin_header = f"📩 <b>{STRINGS[u_lang]['ticket_header']} #{t_id}</b> [{cat}]\n👤 @{m.from_user.username} (<code>{m.chat.id}</code>)\n━━━━━━━\n"
     for adm in OWNERS:
         try:
             if m.content_type == 'text':
@@ -184,45 +190,48 @@ def h_content(m):
             else:
                 bot.send_message(adm, admin_header)
                 bot.copy_message(adm, m.chat.id, m.message_id, reply_markup=get_crm_kb(m.chat.id, t_id))
-        except: pass
+        except Exception as e:
+            print(f"❌ FAILED TO FORWARD TICKET TO ADMIN {adm}: {e}", flush=True)
 
 # --- Коллбеки CRM ---
 @bot.callback_query_handler(func=lambda c: True)
 def h_callbacks(c):
+    if c.from_user.id not in OWNERS: return
     p = c.data.split('_')
     action = p[0]
     
-    if c.from_user.id not in OWNERS: return
-
-    if action == 'rep': # Ответ игроку
+    if action == 'rep': 
         uid, tid = p[1], p[2]
         msg = bot.send_message(c.message.chat.id, f"📝 Пишите ответ для <code>{uid}</code> (Тикет #{tid}):")
         bot.register_next_step_handler(msg, step_reply, uid, tid)
     
-    elif action == 'dos': # Досье
-        res = db_op("SELECT uname, note FROM subjects WHERE uid = ?", (p[1],), fetch=True)[0]
-        bot.send_message(c.message.chat.id, f"👤 <b>ДОСЬЕ {p[1]}</b>\nЮзер: @{res[0]}\nЗаметка: {res[1] or 'пусто'}\n\nНапишите новую заметку:")
+    elif action == 'dos': 
+        res = db_op("SELECT uname, note FROM subjects WHERE uid = ?", (p[1],), fetch=True)
+        uname = res[0][0] if res else "unknown"
+        note = res[0][1] if res else "пусто"
+        bot.send_message(c.message.chat.id, f"👤 <b>ДОСЬЕ {p[1]}</b>\nЮзер: @{uname}\nЗаметка: {note or 'пусто'}\n\nНапишите новую заметку:")
         bot.register_next_step_handler(c.message, step_note, p[1])
 
-    elif action == 'ban': # Бан
+    elif action == 'ban': 
         db_op("UPDATE subjects SET banned = 1 WHERE uid = ?", (p[1],), commit=True)
-        sync_with_admins(c.from_user.id, p[1], types.Message(0,None,None,None,None,None,None), "BANNED")
+        sync_with_admins(c.from_user.id, p[1], "Пользователь внесен в черный список.", "BANNED")
         bot.answer_callback_query(c.id, "Заблокирован", show_alert=True)
 
 def step_reply(m, uid, tid):
-    l = db_op("SELECT lang FROM subjects WHERE uid = ?", (uid,), fetch=True)[0][0]
+    res = db_op("SELECT lang FROM subjects WHERE uid = ?", (uid,), fetch=True)
+    l = res[0][0] if res else 'ru'
     try:
         h = STRINGS[l]['reply']
-        if m.content_type == 'text': bot.send_message(uid, h + f"<i>{m.text}</i>")
+        if m.content_type == 'text': 
+            bot.send_message(uid, h + f"<i>{m.text}</i>")
         else:
             bot.send_message(uid, h)
             bot.copy_message(uid, m.chat.id, m.message_id)
         
-        # СИНХРОНИЗАЦИЯ С КОЛЛЕГАМИ
         sync_with_admins(m.from_user.id, uid, m, f"ANSWER (Ticket #{tid})")
         bot.send_message(m.chat.id, "✅ Ответ доставлен и синхронизирован.")
-    except:
-        bot.send_message(m.chat.id, "❌ Не доставлено (блок).")
+    except Exception as e:
+        bot.send_message(m.chat.id, f"❌ Не доставлено (возможно, блок бота). Ошибка: {e}")
 
 def step_note(m, uid):
     db_op("UPDATE subjects SET note = ? WHERE uid = ?", (m.text, uid), commit=True)
@@ -230,5 +239,5 @@ def step_note(m, uid):
 
 if __name__ == '__main__':
     init_db()
-    print("--- [ONLINE] MASTER CORE LOADED ---")
+    print("--- [ONLINE] MASTER CORE LOADED ---", flush=True)
     bot.infinity_polling()
