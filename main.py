@@ -19,7 +19,7 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 db_lock = Lock()
-DB_FILE = 'dragpolit_enterprise_v5.db'
+DB_FILE = '/app/data/dragpolit_enterprise_v5.db'
 
 # ==========================================
 # 2. МУЛЬТИЯЗЫЧНЫЙ ГЛОССАРИЙ
