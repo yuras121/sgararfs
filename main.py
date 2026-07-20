@@ -2,6 +2,7 @@ import os
 import sqlite3
 import telebot
 import sys
+import time
 from telebot import types
 from datetime import datetime
 from threading import Lock
@@ -19,6 +20,7 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 db_lock = Lock()
+# АБСОЛЮТНИЙ ШЛЯХ ДЛЯ DOCKER VOLUME
 DB_FILE = '/app/data/dragpolit_enterprise_v5.db'
 
 # ==========================================
@@ -66,7 +68,6 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, txt TEXT, ts TEXT, direction TEXT)''', commit=True)
     db_query('''CREATE TABLE IF NOT EXISTS faq_base (
         id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT, answer TEXT, lang TEXT)''', commit=True)
-    # Таблица аудита действий руководства
     db_query('''CREATE TABLE IF NOT EXISTS admin_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, aid INTEGER, action TEXT, target_uid INTEGER, ts TEXT)''', commit=True)
 
@@ -92,23 +93,29 @@ def get_main_kb(uid):
     return kb
 
 def get_admin_panel_kb():
-    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("📢 Рассылка ВСЕМ", callback_data="adm_broadcast"),
-        types.InlineKeyboardButton("📊 Суточный отчет (Audit)", callback_data="adm_report_daily"),
-        types.InlineKeyboardButton("➕ Добавить в FAQ", callback_data="adm_faq_add"),
-        types.InlineKeyboardButton("📂 Бэкап БД", callback_data="adm_backup")
+        types.InlineKeyboardButton("📊 Статистика", callback_data="adm_stats")
     )
+    kb.add(
+        types.InlineKeyboardButton("📊 Суточный отчет (Audit)", callback_data="adm_report_daily"),
+        types.InlineKeyboardButton("➕ Добавить в FAQ", callback_data="adm_faq_add")
+    )
+    kb.add(types.InlineKeyboardButton("📂 Бэкап БД", callback_data="adm_backup"))
     return kb
 
 def crm_control_kb(uid):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("✉️ Ответить", callback_data=f"ans_{uid}"),
-        types.InlineKeyboardButton("👤 Досье/Заметка", callback_data=f"prof_{uid}"),
+        types.InlineKeyboardButton("👤 Досье/Заметка", callback_data=f"prof_{uid}")
+    )
+    kb.add(
         types.InlineKeyboardButton("📜 История", callback_data=f"hist_{uid}"),
         types.InlineKeyboardButton("⛔️ BAN", callback_data=f"ban_{uid}")
     )
+    kb.add(types.InlineKeyboardButton("🟢 Снять BAN (Амнистия)", callback_data=f"unban_{uid}"))
     return kb
 
 # ==========================================
@@ -131,6 +138,22 @@ def h_start(m):
 def h_admin(m):
     if m.chat.id not in OWNERS: return
     bot.send_message(m.chat.id, "🏛 <b>ШТАБ DRAGPOLIT</b>\nВсе администраторы синхронизированы.", reply_markup=get_admin_panel_kb())
+
+@bot.message_handler(commands=['find'])
+def h_find(m):
+    if m.chat.id not in OWNERS: return
+    try:
+        target_uid = int(m.text.split()[1])
+        u = db_query("SELECT username, reg, note, banned FROM subjects WHERE uid = ?", (target_uid,), fetch=True)
+        if not u:
+            return bot.send_message(m.chat.id, "❌ Субъект не найден в базе данных.")
+            
+        status = "⛔️ ЗАБАНЕН" if u[0][3] else "✅ АКТИВЕН"
+        res = f"🔍 <b>РЕЗУЛЬТАТ ПОИСКА:</b>\nID: <code>{target_uid}</code>\nНик: @{u[0][0]}\nСтатус: {status}\nРегистрация: {u[0][1]}\nЗаметка: {u[0][2] or 'нет'}"
+        
+        bot.send_message(m.chat.id, res, reply_markup=crm_control_kb(target_uid))
+    except (IndexError, ValueError):
+        bot.send_message(m.chat.id, "⚠️ Использование: <code>/find ID_пользователя</code>")
 
 # ОБРАБОТКА ТЕКСТОВЫХ МЕНЮ
 @bot.message_handler(func=lambda m: any(m.text in d.values() for d in STRINGS.values()))
@@ -156,7 +179,9 @@ def h_menu(m):
 # ОБРАБОТКА ЛЮБЫХ ВХОДЯЩИХ ДАННЫХ
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'voice'])
 def h_catch_all(m):
-    u = db_query("SELECT lang, banned, state FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)[0]
+    res = db_query("SELECT lang, banned, state FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)
+    if not res: return # Ігноруємо повідомлення, якщо користувач ще не натиснув /start
+    u = res[0]
     if u[1]: return
     if m.chat.id in OWNERS and u[2] == 'IDLE': return # Игнорим свободные сообщения админов
 
@@ -219,16 +244,36 @@ def h_callbacks(c):
             sync_notify(aid, f"⛔️ Заблокировал субъекта <code>{p[1]}</code>")
             bot.answer_callback_query(c.id, "Забанен")
 
+        elif action == 'unban':
+            db_query("UPDATE subjects SET banned = 0 WHERE uid = ?", (p[1],), commit=True)
+            db_query("INSERT INTO admin_logs (aid, action, target_uid, ts) VALUES (?, ?, ?, ?)", 
+                     (aid, "UNBANNED", p[1], datetime.now().strftime("%Y-%m-%d %H:%M")), commit=True)
+            sync_notify(aid, f"🟢 Снял блокировку с субъекта <code>{p[1]}</code>")
+            bot.answer_callback_query(c.id, "Разбанен")
+
         # Системное меню
         elif action == 'adm':
-            if c.data == 'adm_report_daily':
+            if c.data == 'adm_stats':
+                total_users = db_query("SELECT COUNT(*) FROM subjects", fetch=True)[0][0]
+                banned_users = db_query("SELECT COUNT(*) FROM subjects WHERE banned = 1", fetch=True)[0][0]
+                total_msgs = db_query("SELECT COUNT(*) FROM history", fetch=True)[0][0]
+                res = (f"📊 <b>ГЛОБАЛЬНАЯ СТАТИСТИКА:</b>\n"
+                       f"━━━━━━━━━━━━━━━━━━\n"
+                       f"👥 Всего зарегистрировано: <b>{total_users}</b>\n"
+                       f"⛔️ В черном списке: <b>{banned_users}</b>\n"
+                       f"📩 Всего сообщений в БД: <b>{total_msgs}</b>")
+                bot.send_message(c.message.chat.id, res)
+            
+            elif c.data == 'adm_report_daily':
                 logs = db_query("SELECT ts, action, aid, target_uid FROM admin_logs ORDER BY id DESC LIMIT 10", fetch=True)
                 res = "📊 <b>ОТЧЕТ АКТИВНОСТИ ШТАБА:</b>\n" + "\n".join([f"• {x[0]} | {x[1]} | Admin {x[2]} -> {x[3]}" for x in logs])
                 bot.send_message(c.message.chat.id, res)
+                
             elif c.data == 'adm_backup':
                 with open(DB_FILE, 'rb') as f: bot.send_document(c.message.chat.id, f, caption="DATABASE_EXPORT")
+                
             elif c.data == 'adm_broadcast':
-                msg = bot.send_message(c.message.chat.id, "📢 Сообщение для ГЛОБАЛЬНОЙ рассылки:")
+                msg = bot.send_message(c.message.chat.id, "📢 Сообщение для ГЛОБАЛЬНОЙ рассылки (можно с фото/файлом):")
                 bot.register_next_step_handler(msg, step_broadcast)
 
 # --- АДМИН-ЛОГИКА (STEPS) ---
@@ -237,21 +282,30 @@ def step_send_ans(m, uid):
     aid = m.from_user.id
     try:
         content = m.text if m.content_type == 'text' else f"[{m.content_type}]"
+        
+        # 1. Відправляємо відповідь суб'єкту
         if m.content_type == 'text':
             bot.send_message(uid, STRINGS[u_lang]['reply_head'] + f"<i>{m.text}</i>")
         else:
             bot.send_message(uid, STRINGS[u_lang]['reply_head'])
             bot.copy_message(uid, m.chat.id, m.message_id)
         
-        # СИНХРОНИЗАЦИЯ: Пишем в базу и уведомляем штаб
+        # 2. Записуємо дію
         db_query("INSERT INTO history (uid, txt, ts, direction) VALUES (?, ?, ?, ?)", (uid, content, "NOW", "OUT"), commit=True)
         db_query("INSERT INTO admin_logs (aid, action, target_uid, ts) VALUES (?, ?, ?, ?)", 
                  (aid, f"REPLIED: {content[:30]}...", uid, datetime.now().strftime("%H:%M")), commit=True)
         
-        sync_notify(aid, f"✉️ Ответил игроку <code>{uid}</code>:\n<i>«{content[:50]}...»</i>")
-        bot.send_message(m.chat.id, "✅ Доставлено.")
-    except:
-        bot.send_message(m.chat.id, "❌ Ошибка доставки.")
+        # 3. Синхронізація штабу
+        for owner in OWNERS:
+            if owner != aid: 
+                try:
+                    bot.send_message(owner, f"🔔 <b>СИНХРОНИЗАЦИЯ:</b>\nАдмин <code>{aid}</code> ответил субъекту <code>{uid}</code>:")
+                    bot.copy_message(owner, m.chat.id, m.message_id) 
+                except: pass
+        
+        bot.send_message(m.chat.id, "✅ Доставлено. Штаб оповещен.")
+    except Exception as e:
+        bot.send_message(m.chat.id, f"❌ Ошибка доставки: {e}")
 
 def step_save_note(m, uid):
     if m.text != ".":
@@ -271,7 +325,7 @@ def step_broadcast(m):
     bot.send_message(m.chat.id, f"✅ Готово: {s} | Ошибок: {f}")
 
 # ==========================================
-# 7. ГЛОБАЛЬНЫЙ ЗАПУСК
+# 7. ГЛОБАЛЬНЫЙ ЗАПУСК (БРОНЕБІЙНИЙ РЕЖИМ)
 # ==========================================
 if __name__ == '__main__':
     bot.set_my_commands([
@@ -279,4 +333,11 @@ if __name__ == '__main__':
         types.BotCommand("admin", "Терминал управления")
     ])
     print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V6 SYNC SYSTEM ACTIVE.")
-    bot.infinity_polling()
+    
+    # Нескінченний цикл перезапуску
+    while True:
+        try:
+            bot.infinity_polling(timeout=10, long_polling_timeout=5)
+        except Exception as e:
+            print(f"⚠️ Сетевой сбой, переподключение через 5 секунд... Ошибка: {e}")
+            time.sleep(5)
