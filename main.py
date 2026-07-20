@@ -180,10 +180,10 @@ def h_menu(m):
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document', 'voice'])
 def h_catch_all(m):
     res = db_query("SELECT lang, banned, state FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)
-    if not res: return # Ігноруємо повідомлення, якщо користувач ще не натиснув /start
+    if not res: return 
     u = res[0]
     if u[1]: return
-    if m.chat.id in OWNERS and u[2] == 'IDLE': return # Игнорим свободные сообщения админов
+    if m.chat.id in OWNERS and u[2] == 'IDLE': return
 
     is_input = "INPUT" in u[2]
     ts = datetime.now().strftime("%H:%M")
@@ -272,6 +272,10 @@ def h_callbacks(c):
             elif c.data == 'adm_backup':
                 with open(DB_FILE, 'rb') as f: bot.send_document(c.message.chat.id, f, caption="DATABASE_EXPORT")
                 
+            elif c.data == 'adm_faq_add':
+                msg = bot.send_message(c.message.chat.id, "➕ <b>ДОБАВЛЕНИЕ В FAQ</b>\nВведите ВОПРОС (или напишите '.' для отмены):")
+                bot.register_next_step_handler(msg, step_faq_q)
+                
             elif c.data == 'adm_broadcast':
                 msg = bot.send_message(c.message.chat.id, "📢 Сообщение для ГЛОБАЛЬНОЙ рассылки (можно с фото/файлом):")
                 bot.register_next_step_handler(msg, step_broadcast)
@@ -323,6 +327,18 @@ def step_broadcast(m):
         except: f += 1
     sync_notify(m.from_user.id, f"📢 Запустил глобальную рассылку. Покрытие: {s} человек.")
     bot.send_message(m.chat.id, f"✅ Готово: {s} | Ошибок: {f}")
+
+def step_faq_q(m):
+    if m.text == '.': return bot.send_message(m.chat.id, "❌ Отменено.")
+    msg = bot.send_message(m.chat.id, f"❓ <b>Вопрос:</b> <i>{m.text}</i>\n\nТеперь введите ОТВЕТ:")
+    bot.register_next_step_handler(msg, step_faq_a, m.text)
+
+def step_faq_a(m, question):
+    if m.text == '.': return bot.send_message(m.chat.id, "❌ Отменено.")
+    db_query("INSERT INTO faq_base (question, answer, lang) VALUES (?, ?, ?)", 
+             (question, m.text, 'ru'), commit=True)
+    sync_notify(m.from_user.id, f"➕ Добавил новый пункт в FAQ:\nВ: {question}\nО: {m.text[:30]}...")
+    bot.send_message(m.chat.id, "✅ Успешно добавлено в базу FAQ!")
 
 # ==========================================
 # 7. ГЛОБАЛЬНЫЙ ЗАПУСК (БРОНЕБІЙНИЙ РЕЖИМ)
