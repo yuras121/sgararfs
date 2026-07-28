@@ -78,7 +78,7 @@ STRINGS = {
 }
 
 # ==========================================
-# 3. БАЗА ДАННЫХ И НАСТРОЙКИ (CORE)
+# 3. БАЗА ДАННЫХ И АВТО-МИГРАЦИИ (CORE)
 # ==========================================
 def db_query(sql, params=(), fetch=False, commit=False):
     with db_lock:
@@ -98,6 +98,7 @@ def set_setting(key, val):
     db_query("INSERT OR REPLACE INTO settings (key, val) VALUES (?, ?)", (key, str(val)), commit=True)
 
 def init_db():
+    # Таблицы БД
     db_query('''CREATE TABLE IF NOT EXISTS subjects (
         uid INTEGER PRIMARY KEY, username TEXT, lang TEXT DEFAULT 'ru', 
         state TEXT DEFAULT 'IDLE', banned INTEGER DEFAULT 0, warns INTEGER DEFAULT 0,
@@ -125,6 +126,16 @@ def init_db():
     db_query('''CREATE TABLE IF NOT EXISTS reviews (
         id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, username TEXT, rating INTEGER, txt TEXT, status TEXT DEFAULT 'PENDING', ts TEXT)''', commit=True)
 
+    # 🛠 АВТОМАТИЧЕСКАЯ МИГРАЦИЯ ДЛЯ СТАРОЙ БАЗЫ ДАННЫХ
+    try:
+        db_query("ALTER TABLE history ADD COLUMN admin_id INTEGER DEFAULT 0", commit=True)
+    except Exception: pass
+
+    try:
+        db_query("ALTER TABLE subjects ADD COLUMN warns INTEGER DEFAULT 0", commit=True)
+    except Exception: pass
+
+    # Настройки по умолчанию
     if not db_query("SELECT val FROM settings WHERE key = 'mod_open'", fetch=True):
         set_setting('mod_open', '1')
     if not db_query("SELECT val FROM settings WHERE key = 'partner_open'", fetch=True):
@@ -132,6 +143,7 @@ def init_db():
     if not db_query("SELECT val FROM settings WHERE key = 'tester_open'", fetch=True):
         set_setting('tester_open', '1')
 
+    # Инициализация дефолтных вопросов
     if not db_query("SELECT id FROM form_questions WHERE form_type = 'MOD'", fetch=True):
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('MOD', 1, "Укажите ваш возраст и имя/никнейм:", "Specify your age and name/nickname:"), commit=True)
@@ -337,6 +349,14 @@ def start_dynamic_form(uid, form_type, lang):
     bot.register_next_step_handler(msg, process_form_step)
 
 def process_form_step(m):
+    # СБРОС АНКЕТЫ ПРИ ВВОДЕ КОМАНДЫ (НАПР. /start ИЛИ /admin)
+    if m.text and m.text.startswith('/'):
+        db_query("UPDATE subjects SET state = 'IDLE' WHERE uid = ?", (m.chat.id,), commit=True)
+        bot.send_message(m.chat.id, "❌ Заполнение анкеты отменено.", reply_markup=get_main_kb(m.chat.id))
+        if m.text == '/start': return h_start(m)
+        if m.text == '/admin': return h_admin(m)
+        return
+
     res = db_query("SELECT state, lang FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)
     if not res or "RUNFORM" not in res[0][0]: return
     
@@ -393,8 +413,11 @@ def h_catch_all(m):
     ts = datetime.now().strftime("%H:%M")
     txt_log = m.text if m.content_type == 'text' else f"[{m.content_type}]"
     
-    db_query("INSERT INTO history (uid, txt, ts, direction) VALUES (?, ?, ?, ?)", (m.chat.id, txt_log, ts, 'IN'), commit=True)
-    
+    # Безопасный логинг в историю
+    try:
+        db_query("INSERT INTO history (uid, txt, ts, direction) VALUES (?, ?, ?, ?)", (m.chat.id, txt_log, ts, 'IN'), commit=True)
+    except: pass
+
     if is_input:
         bot.send_message(m.chat.id, STRINGS[u[0]]['done'], reply_markup=get_main_kb(m.chat.id))
         db_query("UPDATE subjects SET state = 'IDLE' WHERE uid = ?", (m.chat.id,), commit=True)
@@ -640,22 +663,34 @@ def step_add_question(m, form_type):
     sync_notify_all(m.from_user.id, f"➕ Добавил вопрос в анкету {form_type}: <i>{m.text}</i>")
     bot.send_message(m.chat.id, f"✅ Вопрос успешно добавлен под номером <b>#{count + 1}</b>!")
 
+# АВАРИЙНО-ЗАЩИЩЕННАЯ ОТПРАВКА ОТВЕТА ПОЛЬЗОВАТЕЛЮ
 def step_send_ans(m, uid):
-    u_lang = db_query("SELECT lang FROM subjects WHERE uid = ?", (uid,), fetch=True)[0][0]
+    res_user = db_query("SELECT lang FROM subjects WHERE uid = ?", (uid,), fetch=True)
+    u_lang = res_user[0][0] if res_user else 'ru'
     aid = m.from_user.id
+    
     try:
         content = m.text if m.content_type == 'text' else f"[{m.content_type}]"
+        
+        # 1. Отправляем ответ пользователю
         if m.content_type == 'text':
             bot.send_message(uid, STRINGS[u_lang]['reply_head'] + f"<i>{m.text}</i>")
         else:
             bot.send_message(uid, STRINGS[u_lang]['reply_head'])
             bot.copy_message(uid, m.chat.id, m.message_id)
         
-        db_query("INSERT INTO history (uid, txt, ts, direction, admin_id) VALUES (?, ?, ?, ?, ?)", (uid, content, "NOW", "OUT", aid), commit=True)
+        # 2. Безопасно сохраняем историю (с обработкой старых баз)
+        try:
+            db_query("INSERT INTO history (uid, txt, ts, direction, admin_id) VALUES (?, ?, ?, ?, ?)", 
+                     (uid, content, "NOW", "OUT", aid), commit=True)
+        except Exception:
+            db_query("INSERT INTO history (uid, txt, ts, direction) VALUES (?, ?, ?, ?)", 
+                     (uid, content, "NOW", "OUT"), commit=True)
+        
         sync_notify_all(aid, f"💬 <b>ОТПРАВЛЕН ОТВЕТ:</b>\n<i>«{content}»</i>", target_uid=uid)
-        bot.send_message(m.chat.id, "✅ Ответ отправлен.")
+        bot.send_message(m.chat.id, "✅ Ответ успешно доставлен игроку!")
     except Exception as e:
-        bot.send_message(m.chat.id, f"❌ Ошибка отправки: {e}")
+        bot.send_message(m.chat.id, f"❌ Ошибка доставки сообщения пользователю: {e}")
 
 def step_save_note(m, uid):
     if m.text != ".":
@@ -671,7 +706,7 @@ if __name__ == '__main__':
         types.BotCommand("start", "Главная страница"),
         types.BotCommand("admin", "Терминал управления")
     ])
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V12 ENTERPRISE SYSTEM ONLINE.")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V13 STABLE SYSTEM ONLINE.")
     
     while True:
         try:
