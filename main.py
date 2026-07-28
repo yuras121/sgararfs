@@ -132,7 +132,6 @@ def init_db():
     if not db_query("SELECT val FROM settings WHERE key = 'tester_open'", fetch=True):
         set_setting('tester_open', '1')
 
-    # Инициализация дефолтных вопросов
     if not db_query("SELECT id FROM form_questions WHERE form_type = 'MOD'", fetch=True):
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('MOD', 1, "Укажите ваш возраст и имя/никнейм:", "Specify your age and name/nickname:"), commit=True)
@@ -202,11 +201,11 @@ def get_admin_panel_kb():
         types.InlineKeyboardButton("⚙️ КОНСТРУКТОР АНКЕТ", callback_data="adm_builder")
     )
     kb.add(
-        types.InlineKeyboardButton("📂 Заявки Гравцев", callback_data="adm_apps_list"),
-        types.InlineKeyboardButton("⭐ Отзывы и Идеи", callback_data="adm_reviews_list")
+        types.InlineKeyboardButton("📢 РАССЫЛКА", callback_data="adm_broadcast"),
+        types.InlineKeyboardButton("📂 Список Заявок", callback_data="adm_apps_list")
     )
     kb.add(
-        types.InlineKeyboardButton("📢 Рассылка", callback_data="adm_broadcast"),
+        types.InlineKeyboardButton("⭐ Отзывы и Идеи", callback_data="adm_reviews_list"),
         types.InlineKeyboardButton("📊 Статистика", callback_data="adm_stats")
     )
     kb.add(
@@ -272,7 +271,7 @@ def h_start(m):
 @bot.message_handler(commands=['admin'])
 def h_admin(m):
     if m.chat.id not in OWNERS: return
-    bot.send_message(m.chat.id, "🏛 <b>ТЕРМИНАЛ УПРАВЛЕНИЯ DRAGPOLIT</b>\nУправление анкетами, тестерами, тикетами и настройками.", reply_markup=get_admin_panel_kb())
+    bot.send_message(m.chat.id, "🏛 <b>ТЕРМИНАЛ УПРАВЛЕНИЯ DRAGPOLIT</b>\nУправление анкетами, рассылкой, тестерами, тикетами и настройками.", reply_markup=get_admin_panel_kb())
 
 # ОБРАБОТКА ТЕКСТОВЫХ КНОПОК
 @bot.message_handler(func=lambda m: any(m.text in d.values() for d in STRINGS.values()))
@@ -305,7 +304,6 @@ def h_menu(m):
         if get_setting('partner_open') == '0': return bot.send_message(m.chat.id, STRINGS[lang]['part_closed'])
         return start_dynamic_form(m.chat.id, 'PARTNER', lang)
 
-    # ТЕСТИРОВАНИЕ GOOGLE PLAY
     if m.text in [STRINGS['ru']['b_tester'], STRINGS['en']['b_tester']]:
         if get_setting('tester_open') == '0': return bot.send_message(m.chat.id, STRINGS[lang]['tester_closed'])
         return start_dynamic_form(m.chat.id, 'TESTER', lang)
@@ -466,6 +464,26 @@ def h_callbacks(c):
             )
             return bot.send_message(c.message.chat.id, "⚙️ <b>КОНСТРУКТОР АНКЕТ DRAGPOLIT</b>\nВыберите форму для настройки:", reply_markup=kb)
 
+        # ЗАПУСК РАССЫЛКИ
+        if c.data == 'adm_broadcast':
+            msg = bot.send_message(c.message.chat.id, "📢 <b>ГЛОБАЛЬНАЯ РАССЫЛКА</b>\n\nОтправьте сообщение (текст, фото с описанием, видео, файл или стикер), которое нужно разослать всем пользователям:\n\n<i>(Напишите '.' для отмены)</i>")
+            return bot.register_next_step_handler(msg, step_broadcast)
+
+        # ПРОСМОТР НЕРАССМОТРЕННЫХ ЗАЯВОК
+        if c.data == 'adm_apps_list':
+            apps = db_query("SELECT id, type, uid, ts FROM applications WHERE status = 'PENDING' LIMIT 10", fetch=True)
+            if not apps:
+                return bot.send_message(c.message.chat.id, "📂 Активных нерассмотренных заявок нет.")
+            res = "📂 <b>НЕРАССМОТРЕННЫЕ ЗАЯВКИ:</b>\n\n"
+            for a in apps:
+                res += f"• <b>Заявка #{a[0]} [{a[1]}]</b> от <code>{a[2]}</code> ({a[3]})\n"
+            return bot.send_message(c.message.chat.id, res)
+
+        # ДОБАВЛЕНИЕ FAQ
+        if c.data == 'adm_faq_add':
+            msg = bot.send_message(c.message.chat.id, "➕ <b>ДОБАВЛЕНИЕ FAQ</b>\nВведите ВОПРОС (или напишите '.' для отмены):")
+            return bot.register_next_step_handler(msg, step_faq_q)
+
         if p[0] == 'build' and p[1] == 'view':
             form_type = p[2]
             qs = db_query("SELECT id, step_order, q_ru FROM form_questions WHERE form_type = ? ORDER BY step_order ASC", (form_type,), fetch=True)
@@ -551,6 +569,49 @@ def h_callbacks(c):
 # ==========================================
 # 9. КРОКИ АДМИНИСТРАЦИИ И ПОЛЬЗОВАТЕЛЕЙ
 # ==========================================
+def step_broadcast(m):
+    if m.text == '.':
+        return bot.send_message(m.chat.id, "❌ Рассылка отменена.")
+
+    users = db_query("SELECT uid FROM subjects WHERE banned = 0", fetch=True)
+    if not users:
+        return bot.send_message(m.chat.id, "❌ Нет активных пользователей для рассылки.")
+
+    bot.send_message(m.chat.id, f"⏳ <b>Запуск рассылки...</b>\nПолучателей: {len(users)}")
+
+    succeeded = 0
+    failed = 0
+
+    for u in users:
+        uid = u[0]
+        try:
+            bot.copy_message(chat_id=uid, from_chat_id=m.chat.id, message_id=m.message_id)
+            succeeded += 1
+            time.sleep(0.04) # Антифлуд задержка Telegram (25 сообщений в сек)
+        except Exception:
+            failed += 1
+
+    res_text = (f"📢 <b>РАССЫЛКА ЗАВЕРШЕНА!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ Успешно доставлено: <b>{succeeded}</b>\n"
+                f"❌ Ошибок / Заблокировали: <b>{failed}</b>\n"
+                f"👥 Всего в базе: <b>{len(users)}</b>")
+
+    bot.send_message(m.chat.id, res_text)
+    sync_notify_all(m.from_user.id, f"📢 Провел рассылку.\nДоставлено: {succeeded} | Ошибок: {failed}")
+
+def step_faq_q(m):
+    if m.text == '.': return bot.send_message(m.chat.id, "❌ Отменено.")
+    msg = bot.send_message(m.chat.id, f"❓ <b>Вопрос:</b> <i>{m.text}</i>\n\nТеперь введите ОТВЕТ:")
+    bot.register_next_step_handler(msg, step_faq_a, m.text)
+
+def step_faq_a(m, question):
+    if m.text == '.': return bot.send_message(m.chat.id, "❌ Отменено.")
+    db_query("INSERT INTO faq_base (question, answer, lang) VALUES (?, ?, ?)", 
+             (question, m.text, 'ru'), commit=True)
+    sync_notify_all(m.from_user.id, f"➕ Добавил пункт в FAQ: {question}")
+    bot.send_message(m.chat.id, "✅ Пункт успешно добавлен в FAQ!")
+
 def step_save_review(m):
     st = db_query("SELECT state, lang FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)[0]
     rating = int(st[0].split('|')[1])
@@ -610,7 +671,7 @@ if __name__ == '__main__':
         types.BotCommand("start", "Главная страница"),
         types.BotCommand("admin", "Терминал управления")
     ])
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V11 ENTERPRISE SYSTEM ONLINE.")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V12 ENTERPRISE SYSTEM ONLINE.")
     
     while True:
         try:
