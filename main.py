@@ -35,6 +35,7 @@ STRINGS = {
         'b_tech': "⚙️ Тех-отдел", 
         'b_mod': "📝 Вакансии (Модерация)",
         'b_partner': "🤝 Партнерство",
+        'b_tester': "🧪 Тестирование (Google Play)",
         'b_review': "⭐ Отзыв / Идея",
         'input': "📋 <b>РЕЖИМ ЗАПИСИ:</b> Отправьте ваше сообщение (текст, фото или файл).",
         'done': "✅ Обращение зарегистрировано. Ожидайте ответа руководства.",
@@ -42,6 +43,7 @@ STRINGS = {
         'banned': "⛔️ Доступ к боту ограничен службой безопасности DragPolit.",
         'mod_closed': "🚫 <b>Набор в команду модерации временно ЗАКРЫТ.</b>\nСледите за новостями проекта DragPolit!",
         'part_closed': "🚫 <b>Прием заявок на партнерство временно ЗАКРЫТ.</b>",
+        'tester_closed': "🚫 <b>Прием заявок на тестирование игры временно ЗАКРЫТ.</b>",
         'no_questions': "⚠️ Для данной формы еще не настроены вопросы. Обратитесь к администрации.",
         'app_done': "✅ Спасибо! Ваша заявка успешно отправлена на рассмотрение Высшему Руководству.",
         'app_already': "⚠️ Вы уже подали заявку. Ожидайте решения администрации.",
@@ -57,6 +59,7 @@ STRINGS = {
         'b_tech': "⚙️ Tech Support", 
         'b_mod': "📝 Vacancies (Moderation)",
         'b_partner': "🤝 Partnership",
+        'b_tester': "🧪 Playtest (Google Play)",
         'b_review': "⭐ Feedback / Ideas",
         'input': "📋 <b>RECORD MODE:</b> Type your message or upload media.",
         'done': "✅ Message registered. Please wait for management response.",
@@ -64,6 +67,7 @@ STRINGS = {
         'banned': "⛔️ Access restricted by DragPolit security service.",
         'mod_closed': "🚫 <b>Moderator recruitment is currently CLOSED.</b>\nFollow DragPolit news for updates!",
         'part_closed': "🚫 <b>Partnership applications are currently CLOSED.</b>",
+        'tester_closed': "🚫 <b>Playtest applications are currently CLOSED.</b>",
         'no_questions': "⚠️ Form questions are not configured yet. Contact support.",
         'app_done': "✅ Thank you! Your application has been submitted to Management.",
         'app_already': "⚠️ You have already submitted an application. Please wait for review.",
@@ -118,7 +122,6 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, uid INTEGER, username TEXT,
         data_json TEXT, status TEXT DEFAULT 'PENDING', ts TEXT)''', commit=True)
 
-    # Таблица Отзывов и Предложений
     db_query('''CREATE TABLE IF NOT EXISTS reviews (
         id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, username TEXT, rating INTEGER, txt TEXT, status TEXT DEFAULT 'PENDING', ts TEXT)''', commit=True)
 
@@ -126,19 +129,31 @@ def init_db():
         set_setting('mod_open', '1')
     if not db_query("SELECT val FROM settings WHERE key = 'partner_open'", fetch=True):
         set_setting('partner_open', '1')
+    if not db_query("SELECT val FROM settings WHERE key = 'tester_open'", fetch=True):
+        set_setting('tester_open', '1')
 
-    if not db_query("SELECT id FROM form_questions", fetch=True):
+    # Инициализация дефолтных вопросов
+    if not db_query("SELECT id FROM form_questions WHERE form_type = 'MOD'", fetch=True):
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('MOD', 1, "Укажите ваш возраст и имя/никнейм:", "Specify your age and name/nickname:"), commit=True)
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('MOD', 2, "Опишите ваш опыт модерации в Telegram/играх:", "Describe your moderation experience:"), commit=True)
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('MOD', 3, "Сколько часов в день вы готовы уделять игре?", "How many hours per day can you dedicate?"), commit=True)
-        
+
+    if not db_query("SELECT id FROM form_questions WHERE form_type = 'PARTNER'", fetch=True):
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('PARTNER', 1, "Укажите ссылку на ваш канал/проект:", "Link to your channel/project:"), commit=True)
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('PARTNER', 2, "Укажите размер аудитории:", "Audience size:"), commit=True)
+
+    if not db_query("SELECT id FROM form_questions WHERE form_type = 'TESTER'", fetch=True):
+        db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
+                 ('TESTER', 1, "Укажите ваш e-mail аккаунта Google Play (для выдачи доступа к тесту):", "Specify your Google Play e-mail (for test access):"), commit=True)
+        db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
+                 ('TESTER', 2, "Укажите модель смартфона и версию Android (например: Samsung S21, Android 13):", "Specify your device model and Android version:"), commit=True)
+        db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
+                 ('TESTER', 3, "Опишите опыт тестирования и сколько времени готовы уделить поиску багов:", "Describe testing experience and time you can dedicate:"), commit=True)
 
 init_db()
 
@@ -168,13 +183,14 @@ def get_main_kb(uid):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add(STRINGS[lang]['b_report'], STRINGS[lang]['b_tech'])
     kb.add(STRINGS[lang]['b_mod'], STRINGS[lang]['b_partner'])
-    kb.add(STRINGS[lang]['b_review'], STRINGS[lang]['b_faq'])
-    kb.add(STRINGS[lang]['b_lang'])
+    kb.add(STRINGS[lang]['b_tester'], STRINGS[lang]['b_review'])
+    kb.add(STRINGS[lang]['b_faq'], STRINGS[lang]['b_lang'])
     return kb
 
 def get_admin_panel_kb():
     mod_status = "🟢 ВКЛ" if get_setting('mod_open') == '1' else "🔴 ВЫКЛ"
     part_status = "🟢 ВКЛ" if get_setting('partner_open') == '1' else "🔴 ВЫКЛ"
+    test_status = "🟢 ВКЛ" if get_setting('tester_open') == '1' else "🔴 ВЫКЛ"
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -182,18 +198,21 @@ def get_admin_panel_kb():
         types.InlineKeyboardButton(f"Партнерство: {part_status}", callback_data="toggle_partner")
     )
     kb.add(
-        types.InlineKeyboardButton("⚙️ КОНСТРУКТОР АНКЕТ", callback_data="adm_builder"),
-        types.InlineKeyboardButton("📂 Заявки Гравцев", callback_data="adm_apps_list")
+        types.InlineKeyboardButton(f"Тестирование: {test_status}", callback_data="toggle_tester"),
+        types.InlineKeyboardButton("⚙️ КОНСТРУКТОР АНКЕТ", callback_data="adm_builder")
     )
     kb.add(
-        types.InlineKeyboardButton("⭐ Отзывы и Идеи", callback_data="adm_reviews_list"),
-        types.InlineKeyboardButton("📢 Рассылка", callback_data="adm_broadcast")
+        types.InlineKeyboardButton("📂 Заявки Гравцев", callback_data="adm_apps_list"),
+        types.InlineKeyboardButton("⭐ Отзывы и Идеи", callback_data="adm_reviews_list")
     )
     kb.add(
-        types.InlineKeyboardButton("📊 Статистика", callback_data="adm_stats"),
-        types.InlineKeyboardButton("➕ Добавить FAQ", callback_data="adm_faq_add")
+        types.InlineKeyboardButton("📢 Рассылка", callback_data="adm_broadcast"),
+        types.InlineKeyboardButton("📊 Статистика", callback_data="adm_stats")
     )
-    kb.add(types.InlineKeyboardButton("💾 Бэкап БД", callback_data="adm_backup"))
+    kb.add(
+        types.InlineKeyboardButton("➕ Добавить FAQ", callback_data="adm_faq_add"),
+        types.InlineKeyboardButton("💾 Бэкап БД", callback_data="adm_backup")
+    )
     return kb
 
 def crm_control_kb(uid):
@@ -253,7 +272,7 @@ def h_start(m):
 @bot.message_handler(commands=['admin'])
 def h_admin(m):
     if m.chat.id not in OWNERS: return
-    bot.send_message(m.chat.id, "🏛 <b>ТЕРМИНАЛ УПРАВЛЕНИЯ DRAGPOLIT</b>\nУправление анкетами, тикетами, отзывами и настройками.", reply_markup=get_admin_panel_kb())
+    bot.send_message(m.chat.id, "🏛 <b>ТЕРМИНАЛ УПРАВЛЕНИЯ DRAGPOLIT</b>\nУправление анкетами, тестерами, тикетами и настройками.", reply_markup=get_admin_panel_kb())
 
 # ОБРАБОТКА ТЕКСТОВЫХ КНОПОК
 @bot.message_handler(func=lambda m: any(m.text in d.values() for d in STRINGS.values()))
@@ -275,7 +294,6 @@ def h_menu(m):
         for q in faqs: kb.add(types.InlineKeyboardButton(q[0], callback_data=f"showfaq_{q[1]}"))
         return bot.send_message(m.chat.id, "<b>Часто задаваемые вопросы:</b>", reply_markup=kb)
 
-    # НАБОР ОТЗЫВОВ И ИДЕЙ
     if m.text in [STRINGS['ru']['b_review'], STRINGS['en']['b_review']]:
         return bot.send_message(m.chat.id, STRINGS[lang]['rev_star'], reply_markup=review_rating_kb())
 
@@ -286,6 +304,11 @@ def h_menu(m):
     if m.text in [STRINGS['ru']['b_partner'], STRINGS['en']['b_partner']]:
         if get_setting('partner_open') == '0': return bot.send_message(m.chat.id, STRINGS[lang]['part_closed'])
         return start_dynamic_form(m.chat.id, 'PARTNER', lang)
+
+    # ТЕСТИРОВАНИЕ GOOGLE PLAY
+    if m.text in [STRINGS['ru']['b_tester'], STRINGS['en']['b_tester']]:
+        if get_setting('tester_open') == '0': return bot.send_message(m.chat.id, STRINGS[lang]['tester_closed'])
+        return start_dynamic_form(m.chat.id, 'TESTER', lang)
 
     db_query("UPDATE subjects SET state = ? WHERE uid = ?", (f"INPUT|{m.text}", m.chat.id), commit=True)
     bot.send_message(m.chat.id, STRINGS[lang]['input'], reply_markup=types.ReplyKeyboardRemove())
@@ -304,7 +327,14 @@ def start_dynamic_form(uid, form_type, lang):
     db_query("UPDATE subjects SET state = ? WHERE uid = ?", (f"RUNFORM|{form_type}|0|{answers_init}", uid), commit=True)
     
     q_text = questions[0][1] if lang == 'ru' else questions[0][2]
-    header = "📝 <b>АНКЕТА МОДЕРАТОРА</b>\n\n" if form_type == 'MOD' else "🤝 <b>ЗАЯВКА НА ПАРТНЕРСТВО</b>\n\n"
+    
+    headers = {
+        'MOD': "📝 <b>АНКЕТА МОДЕРАТОРА</b>\n\n",
+        'PARTNER': "🤝 <b>ЗАЯВКА НА ПАРТНЕРСТВО</b>\n\n",
+        'TESTER': "🧪 <b>ЗАЯВКА НА ТЕСТИРОВАНИЕ (GOOGLE PLAY)</b>\n\n"
+    }
+    header = headers.get(form_type, "📋 <b>ЗАПОЛНЕНИЕ АНКЕТЫ</b>\n\n")
+    
     msg = bot.send_message(uid, f"{header}<b>Шаг 1/{len(questions)}:</b> {q_text}", reply_markup=types.ReplyKeyboardRemove())
     bot.register_next_step_handler(msg, process_form_step)
 
@@ -333,7 +363,13 @@ def process_form_step(m):
 
         bot.send_message(m.chat.id, STRINGS[lang]['app_done'], reply_markup=get_main_kb(m.chat.id))
 
-        title = "📝 <b>НОВАЯ ЗАЯВКА В МОДЕРАТОРЫ</b>" if form_type == 'MOD' else "🤝 <b>НОВАЯ ЗАЯВКА НА ПАРТНЕРСТВО</b>"
+        titles = {
+            'MOD': "📝 <b>НОВАЯ ЗАЯВКА В МОДЕРАТОРЫ</b>",
+            'PARTNER': "🤝 <b>НОВАЯ ЗАЯВКА НА ПАРТНЕРСТВО</b>",
+            'TESTER': "🧪 <b>НОВАЯ ЗАЯВКА ТЕСТИРОВЩИКА (GOOGLE PLAY)</b>"
+        }
+        title = titles.get(form_type, "📋 <b>НОВАЯ ЗАЯВКА</b>")
+        
         card = f"{title} <b>#{app_id}</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 <b>Заявитель:</b> @{m.from_user.username} (<code>{m.chat.id}</code>)\n\n"
         for idx, q_item in enumerate(questions):
             ans_val = answers[idx] if idx < len(answers) else '—'
@@ -386,7 +422,6 @@ def h_callbacks(c):
     action = p[0]
     aid = c.from_user.id
     
-    # Оценка отзывов (Пользователь)
     if action == 'star':
         rating = int(p[1])
         lang = db_query("SELECT lang FROM subjects WHERE uid = ?", (c.from_user.id,), fetch=True)[0][0]
@@ -415,11 +450,19 @@ def h_callbacks(c):
             sync_notify_all(aid, f"⚙️ Изменил прием Партнерства на: <b>{'ВКЛ' if new_v=='1' else 'ВЫКЛ'}</b>")
             return bot.answer_callback_query(c.id, "Статус изменен")
 
+        if c.data == 'toggle_tester':
+            new_v = '0' if get_setting('tester_open') == '1' else '1'
+            set_setting('tester_open', new_v)
+            bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=get_admin_panel_kb())
+            sync_notify_all(aid, f"⚙️ Изменил прием Тестировщиков на: <b>{'ВКЛ' if new_v=='1' else 'ВЫКЛ'}</b>")
+            return bot.answer_callback_query(c.id, "Статус изменен")
+
         if c.data == 'adm_builder':
-            kb = types.InlineKeyboardMarkup(row_width=2)
+            kb = types.InlineKeyboardMarkup(row_width=1)
             kb.add(
                 types.InlineKeyboardButton("📝 Вопросы Модерации", callback_data="build_view_MOD"),
-                types.InlineKeyboardButton("🤝 Вопросы Партнерства", callback_data="build_view_PARTNER")
+                types.InlineKeyboardButton("🤝 Вопросы Партнерства", callback_data="build_view_PARTNER"),
+                types.InlineKeyboardButton("🧪 Вопросы Тестировщиков (GP)", callback_data="build_view_TESTER")
             )
             return bot.send_message(c.message.chat.id, "⚙️ <b>КОНСТРУКТОР АНКЕТ DRAGPOLIT</b>\nВыберите форму для настройки:", reply_markup=kb)
 
@@ -520,7 +563,6 @@ def step_save_review(m):
     db_query("UPDATE subjects SET state = 'IDLE' WHERE uid = ?", (m.chat.id,), commit=True)
     bot.send_message(m.chat.id, STRINGS[lang]['rev_thanks'], reply_markup=get_main_kb(m.chat.id))
 
-    # Уведомление Штабу о новом отзыве
     stars = "⭐" * rating
     rev_card = (f"⭐ <b>НОВЫЙ ОТЗЫВ / ИДЕЯ</b>\n━━━━━━━━━━━━━━━━━━━━\n"
                 f"👤 <b>От:</b> @{m.from_user.username} (<code>{m.chat.id}</code>)\n"
@@ -568,7 +610,7 @@ if __name__ == '__main__':
         types.BotCommand("start", "Главная страница"),
         types.BotCommand("admin", "Терминал управления")
     ])
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V10 ENTERPRISE SYSTEM ONLINE.")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V11 ENTERPRISE SYSTEM ONLINE.")
     
     while True:
         try:
