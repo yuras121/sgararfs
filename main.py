@@ -93,7 +93,9 @@ def db_query(sql, params=(), fetch=False, commit=False):
             c = conn.cursor()
             c.execute(sql, params)
             res = c.fetchall() if fetch else None
-            if commit: conn.commit()
+            if commit: 
+                conn.commit()
+                return c.lastrowid # Исправление: возвращаем корректный ID при сохранении
             return res
 
 def get_setting(key, default="1"):
@@ -131,16 +133,13 @@ def init_db():
     db_query('''CREATE TABLE IF NOT EXISTS reviews (
         id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, username TEXT, rating INTEGER, txt TEXT, status TEXT DEFAULT 'PENDING', ts TEXT)''', commit=True)
 
-    # 🛠 АВТОМАТИЧЕСКАЯ МИГРАЦИЯ ДЛЯ СТАРОЙ БАЗЫ ДАННЫХ
     try:
         db_query("ALTER TABLE history ADD COLUMN admin_id INTEGER DEFAULT 0", commit=True)
     except Exception: pass
-
     try:
         db_query("ALTER TABLE subjects ADD COLUMN warns INTEGER DEFAULT 0", commit=True)
     except Exception: pass
 
-    # Настройки по умолчанию
     if not db_query("SELECT val FROM settings WHERE key = 'mod_open'", fetch=True):
         set_setting('mod_open', '1')
     if not db_query("SELECT val FROM settings WHERE key = 'partner_open'", fetch=True):
@@ -150,7 +149,6 @@ def init_db():
     if not db_query("SELECT val FROM settings WHERE key = 'maintenance'", fetch=True):
         set_setting('maintenance', '0')
 
-    # Инициализация дефолтных вопросов
     if not db_query("SELECT id FROM form_questions WHERE form_type = 'MOD'", fetch=True):
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('MOD', 1, "Укажите ваш возраст и имя/никнейм:", "Specify your age and name/nickname:"), commit=True)
@@ -158,13 +156,11 @@ def init_db():
                  ('MOD', 2, "Опишите ваш опыт модерации в Telegram/играх:", "Describe your moderation experience:"), commit=True)
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('MOD', 3, "Сколько часов в день вы готовы уделять игре?", "How many hours per day can you dedicate?"), commit=True)
-
     if not db_query("SELECT id FROM form_questions WHERE form_type = 'PARTNER'", fetch=True):
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('PARTNER', 1, "Укажите ссылку на ваш канал/проект:", "Link to your channel/project:"), commit=True)
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('PARTNER', 2, "Укажите размер аудитории:", "Audience size:"), commit=True)
-
     if not db_query("SELECT id FROM form_questions WHERE form_type = 'TESTER'", fetch=True):
         db_query("INSERT INTO form_questions (form_type, step_order, q_ru, q_en) VALUES (?, ?, ?, ?)",
                  ('TESTER', 1, "Укажите ваш e-mail аккаунта Google Play (для выдачи доступа к тесту):", "Specify your Google Play e-mail (for test access):"), commit=True)
@@ -176,7 +172,26 @@ def init_db():
 init_db()
 
 # ==========================================
-# 4. УМНАЯ СИНХРОНИЗАЦИЯ И КЛАВИАТУРЫ
+# УМНАЯ ОТПРАВКА СТАРЫМ ТЕСТЕРАМ (ОДИН РАЗ)
+# ==========================================
+if get_setting('beta_sent_v1', '0') == '0':
+    print("⏳ Отправка сообщения старым тестерам (одноразовая акция)...")
+    OLD_TESTERS = [5748747465, 8522955956, 8639354316]
+    TEXT = "Уважаемые тестеры, вы приглашены в программу тестирования. Просьба загрузить приложение для начала тестовых работ по указанной ссылке: https://play.google.com/apps/internaltest/4701471368693208645. Обратите внимание, что доступ осуществляется исключительно по электронной почте, указанной ранее; в противном случае вход будет невозможен."
+    
+    for uid in OLD_TESTERS:
+        try:
+            bot.send_message(uid, TEXT)
+            db_query("UPDATE applications SET status = 'ACCEPTED' WHERE uid = ? AND type = 'TESTER'", (uid,), commit=True)
+            print(f"✅ Успешно отправлено: {uid}")
+        except Exception as e:
+            print(f"❌ Ошибка с {uid}: {e}")
+            
+    set_setting('beta_sent_v1', '1')
+    print("✅ Рассылка старым тестерам завершена и сохранена!")
+
+# ==========================================
+# 4. СИНХРОНИЗАЦИЯ И КЛАВИАТУРЫ
 # ==========================================
 def sync_notify_all(sender_id, text, target_uid=None):
     sender_user = f"ID: {sender_id}"
@@ -210,7 +225,7 @@ def get_admin_panel_kb():
     mod_status = "🟢 ВКЛ" if get_setting('mod_open') == '1' else "🔴 ВЫКЛ"
     part_status = "🟢 ВКЛ" if get_setting('partner_open') == '1' else "🔴 ВЫКЛ"
     test_status = "🟢 ВКЛ" if get_setting('tester_open') == '1' else "🔴 ВЫКЛ"
-    maint_status = "🔴 АКТИВНЫ" if get_setting('maintenance') == '1' else "🟢 ВЫКЛЮЧЕНЫ"
+    maint_status = "🔴 АКТИВНЫ" if get_setting('maintenance') == '0' else "🟢 ВЫКЛЮЧЕНЫ"
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -302,7 +317,6 @@ def h_admin(m):
 # ОБРАБОТКА ТЕКСТОВЫХ КНОПОК
 @bot.message_handler(func=lambda m: any(m.text in d.values() for d in STRINGS.values()))
 def h_menu(m):
-    # БЛОКИРОВКА ПРИ ТЕХ. РАБОТАХ
     if get_setting('maintenance') == '1' and m.chat.id not in OWNERS:
         lang = db_query("SELECT lang FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)[0][0]
         return bot.send_message(m.chat.id, STRINGS[lang]['maintenance'])
@@ -311,7 +325,6 @@ def h_menu(m):
     if not res or res[0][1]: return
     lang = res[0][0]
 
-    # ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ
     if m.text in [STRINGS['ru']['b_profile'], STRINGS['en']['b_profile']]:
         u_data = db_query("SELECT reg, warns FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)[0]
         apps = db_query("SELECT type, status FROM applications WHERE uid = ?", (m.chat.id,), fetch=True)
@@ -384,7 +397,6 @@ def start_dynamic_form(uid, form_type, lang):
     bot.register_next_step_handler(msg, process_form_step)
 
 def process_form_step(m):
-    # СБРОС АНКЕТЫ ПРИ ВВОДЕ КОМАНДЫ
     if m.text and m.text.startswith('/'):
         db_query("UPDATE subjects SET state = 'IDLE' WHERE uid = ?", (m.chat.id,), commit=True)
         bot.send_message(m.chat.id, "❌ Заполнение анкеты отменено.", reply_markup=get_main_kb(m.chat.id))
@@ -410,9 +422,10 @@ def process_form_step(m):
     else:
         db_query("UPDATE subjects SET state = 'IDLE' WHERE uid = ?", (m.chat.id,), commit=True)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        db_query("INSERT INTO applications (type, uid, username, data_json, ts) VALUES (?, ?, ?, ?, ?)", 
+        
+        # Исправление бага с ID #0: сразу сохраняем и забираем правильный app_id
+        app_id = db_query("INSERT INTO applications (type, uid, username, data_json, ts) VALUES (?, ?, ?, ?, ?)", 
                  (form_type, m.chat.id, m.from_user.username, json.dumps(answers), ts), commit=True)
-        app_id = db_query("SELECT last_insert_rowid()", fetch=True)[0][0]
 
         bot.send_message(m.chat.id, STRINGS[lang]['app_done'], reply_markup=get_main_kb(m.chat.id))
 
@@ -442,7 +455,6 @@ def h_catch_all(m):
     if not res: return 
     u = res[0]
     
-    # БЛОКИРОВКА ПРИ ТЕХ. РАБОТАХ ДЛЯ ОБЫЧНЫХ СООБЩЕНИЙ
     if get_setting('maintenance') == '1' and m.chat.id not in OWNERS:
         bot.send_message(m.chat.id, STRINGS[u[0]]['maintenance'])
         return
@@ -534,13 +546,11 @@ def h_callbacks(c):
             )
             return bot.send_message(c.message.chat.id, "⚙️ <b>КОНСТРУКТОР АНКЕТ DRAGPOLIT</b>\nВыберите форму для настройки:", reply_markup=kb)
 
-        # ЗАПУСК РАССЫЛКИ (УМНАЯ)
         if c.data.startswith('adm_broadcast_'):
             aud = "ВСЕМ ИГРОКАМ" if c.data == 'adm_broadcast_all' else "ТОЛЬКО ПРИНЯТЫМ ТЕСТЕРАМ"
             msg = bot.send_message(c.message.chat.id, f"📢 <b>РАССЫЛКА: {aud}</b>\n\nОтправьте сообщение (текст, фото с описанием, видео, файл или стикер), которое нужно разослать:\n\n<i>(Напишите '.' для отмены)</i>")
             return bot.register_next_step_handler(msg, step_broadcast, c.data)
 
-        # ПРОСМОТР НЕРАССМОТРЕННЫХ ЗАЯВОК
         if c.data == 'adm_apps_list':
             apps = db_query("SELECT id, type, uid, ts FROM applications WHERE status = 'PENDING' LIMIT 10", fetch=True)
             if not apps:
@@ -550,12 +560,10 @@ def h_callbacks(c):
                 res += f"• <b>Заявка #{a[0]} [{a[1]}]</b> от <code>{a[2]}</code> ({a[3]})\n"
             return bot.send_message(c.message.chat.id, res)
 
-        # ДОБАВЛЕНИЕ FAQ
         if c.data == 'adm_faq_add':
             msg = bot.send_message(c.message.chat.id, "➕ <b>ДОБАВЛЕНИЕ FAQ</b>\nВведите ВОПРОС (или напишите '.' для отмены):")
             return bot.register_next_step_handler(msg, step_faq_q)
             
-        # ЭКСПОРТ ТЕСТЕРОВ
         elif c.data == 'adm_export_testers':
             apps = db_query("SELECT username, data_json FROM applications WHERE type = 'TESTER' AND status = 'ACCEPTED'", fetch=True)
             if not apps: return bot.send_message(c.message.chat.id, "📂 Нет принятых тестировщиков.")
@@ -780,7 +788,7 @@ if __name__ == '__main__':
         types.BotCommand("start", "Главная страница"),
         types.BotCommand("admin", "Терминал управления")
     ])
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V14 ENTERPRISE ONLINE.")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V15 ENTERPRISE ONLINE.")
     
     while True:
         try:
