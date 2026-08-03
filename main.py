@@ -37,6 +37,7 @@ STRINGS = {
         'b_partner': "🤝 Партнерство",
         'b_tester': "🧪 Тестирование (Google Play)",
         'b_review': "⭐ Отзыв / Идея",
+        'b_profile': "👤 Мой профиль",
         'input': "📋 <b>РЕЖИМ ЗАПИСИ:</b> Отправьте ваше сообщение (текст, фото или файл).",
         'done': "✅ Обращение зарегистрировано. Ожидайте ответа руководства.",
         'reply_head': "🏛 <b>ОФИЦИАЛЬНЫЙ ОТВЕТ АДМИНИСТРАЦИИ DRAGPOLIT:</b>\n━━━━━━━━━━━━━━━━━━━━\n\n",
@@ -49,7 +50,9 @@ STRINGS = {
         'app_already': "⚠️ Вы уже подали заявку. Ожидайте решения администрации.",
         'rev_star': "⭐ <b>ОЦЕНКА ПРОЕКТА / ОБНОВЛЕНИЯ:</b>\nВыберите вашу оценку от 1 до 5 звезд:",
         'rev_text': "📝 Напишите ваш отзыв или предложение по улучшению игры DragPolit:",
-        'rev_thanks': "🙏 Спасибо за ваш отзыв! Он отправлен на модерацию руководству."
+        'rev_thanks': "🙏 Спасибо за ваш отзыв! Он отправлен на модерацию руководству.",
+        'maintenance': "🛠 <b>ТЕХНИЧЕСКИЕ РАБОТЫ</b>\nСервер временно недоступен в связи с обновлением. Пожалуйста, подождите.",
+        'b_profile_text': "👤 <b>ЛИЧНЫЙ КАБИНЕТ</b>\n\n🆔 Ваш ID: <code>{uid}</code>\n📅 Регистрация: {reg}\n⚠️ Варны: {warns}/3\n\n<b>Ваши заявки:</b>\n{apps}"
     },
     'en': {
         'start': "🏛 <b>DragPolit Central Reception</b>\nWelcome to the official game center. Select a department or check the FAQ:",
@@ -61,6 +64,7 @@ STRINGS = {
         'b_partner': "🤝 Partnership",
         'b_tester': "🧪 Playtest (Google Play)",
         'b_review': "⭐ Feedback / Ideas",
+        'b_profile': "👤 My Profile",
         'input': "📋 <b>RECORD MODE:</b> Type your message or upload media.",
         'done': "✅ Message registered. Please wait for management response.",
         'reply_head': "🏛 <b>OFFICIAL DRAGPOLIT RESPONSE:</b>\n━━━━━━━━━━━━━━━━━━━━\n\n",
@@ -73,7 +77,9 @@ STRINGS = {
         'app_already': "⚠️ You have already submitted an application. Please wait for review.",
         'rev_star': "⭐ <b>PROJECT / UPDATE RATING:</b>\nChoose your rating from 1 to 5 stars:",
         'rev_text': "📝 Type your review or feedback for the DragPolit team:",
-        'rev_thanks': "🙏 Thank you for your feedback! It has been submitted for review."
+        'rev_thanks': "🙏 Thank you for your feedback! It has been submitted for review.",
+        'maintenance': "🛠 <b>MAINTENANCE BREAK</b>\nThe server is temporarily unavailable due to an update. Please stand by.",
+        'b_profile_text': "👤 <b>USER PROFILE</b>\n\n🆔 Your ID: <code>{uid}</code>\n📅 Registration: {reg}\n⚠️ Warns: {warns}/3\n\n<b>Your applications:</b>\n{apps}"
     }
 }
 
@@ -98,7 +104,6 @@ def set_setting(key, val):
     db_query("INSERT OR REPLACE INTO settings (key, val) VALUES (?, ?)", (key, str(val)), commit=True)
 
 def init_db():
-    # Таблицы БД
     db_query('''CREATE TABLE IF NOT EXISTS subjects (
         uid INTEGER PRIMARY KEY, username TEXT, lang TEXT DEFAULT 'ru', 
         state TEXT DEFAULT 'IDLE', banned INTEGER DEFAULT 0, warns INTEGER DEFAULT 0,
@@ -142,6 +147,8 @@ def init_db():
         set_setting('partner_open', '1')
     if not db_query("SELECT val FROM settings WHERE key = 'tester_open'", fetch=True):
         set_setting('tester_open', '1')
+    if not db_query("SELECT val FROM settings WHERE key = 'maintenance'", fetch=True):
+        set_setting('maintenance', '0')
 
     # Инициализация дефолтных вопросов
     if not db_query("SELECT id FROM form_questions WHERE form_type = 'MOD'", fetch=True):
@@ -195,6 +202,7 @@ def get_main_kb(uid):
     kb.add(STRINGS[lang]['b_report'], STRINGS[lang]['b_tech'])
     kb.add(STRINGS[lang]['b_mod'], STRINGS[lang]['b_partner'])
     kb.add(STRINGS[lang]['b_tester'], STRINGS[lang]['b_review'])
+    kb.add(STRINGS[lang]['b_profile'])
     kb.add(STRINGS[lang]['b_faq'], STRINGS[lang]['b_lang'])
     return kb
 
@@ -202,6 +210,7 @@ def get_admin_panel_kb():
     mod_status = "🟢 ВКЛ" if get_setting('mod_open') == '1' else "🔴 ВЫКЛ"
     part_status = "🟢 ВКЛ" if get_setting('partner_open') == '1' else "🔴 ВЫКЛ"
     test_status = "🟢 ВКЛ" if get_setting('tester_open') == '1' else "🔴 ВЫКЛ"
+    maint_status = "🔴 АКТИВНЫ" if get_setting('maintenance') == '1' else "🟢 ВЫКЛЮЧЕНЫ"
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -210,20 +219,25 @@ def get_admin_panel_kb():
     )
     kb.add(
         types.InlineKeyboardButton(f"Тестирование: {test_status}", callback_data="toggle_tester"),
-        types.InlineKeyboardButton("⚙️ КОНСТРУКТОР АНКЕТ", callback_data="adm_builder")
+        types.InlineKeyboardButton(f"🛠 Тех. работы: {maint_status}", callback_data="toggle_maint")
     )
     kb.add(
-        types.InlineKeyboardButton("📢 РАССЫЛКА", callback_data="adm_broadcast"),
+        types.InlineKeyboardButton("⚙️ КОНСТРУКТОР АНКЕТ", callback_data="adm_builder"),
         types.InlineKeyboardButton("📂 Список Заявок", callback_data="adm_apps_list")
+    )
+    kb.add(
+        types.InlineKeyboardButton("📢 РАССЫЛКА ВСЕМ", callback_data="adm_broadcast_all"),
+        types.InlineKeyboardButton("🧪 РАССЫЛКА ТЕСТЕРАМ", callback_data="adm_broadcast_test")
     )
     kb.add(
         types.InlineKeyboardButton("⭐ Отзывы и Идеи", callback_data="adm_reviews_list"),
         types.InlineKeyboardButton("📊 Статистика", callback_data="adm_stats")
     )
     kb.add(
-        types.InlineKeyboardButton("➕ Добавить FAQ", callback_data="adm_faq_add"),
+        types.InlineKeyboardButton("📥 Экспорт Тестеров (GP)", callback_data="adm_export_testers"),
         types.InlineKeyboardButton("💾 Бэкап БД", callback_data="adm_backup")
     )
+    kb.add(types.InlineKeyboardButton("➕ Добавить FAQ", callback_data="adm_faq_add"))
     return kb
 
 def crm_control_kb(uid):
@@ -288,9 +302,30 @@ def h_admin(m):
 # ОБРАБОТКА ТЕКСТОВЫХ КНОПОК
 @bot.message_handler(func=lambda m: any(m.text in d.values() for d in STRINGS.values()))
 def h_menu(m):
+    # БЛОКИРОВКА ПРИ ТЕХ. РАБОТАХ
+    if get_setting('maintenance') == '1' and m.chat.id not in OWNERS:
+        lang = db_query("SELECT lang FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)[0][0]
+        return bot.send_message(m.chat.id, STRINGS[lang]['maintenance'])
+
     res = db_query("SELECT lang, banned FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)
     if not res or res[0][1]: return
     lang = res[0][0]
+
+    # ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ
+    if m.text in [STRINGS['ru']['b_profile'], STRINGS['en']['b_profile']]:
+        u_data = db_query("SELECT reg, warns FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)[0]
+        apps = db_query("SELECT type, status FROM applications WHERE uid = ?", (m.chat.id,), fetch=True)
+        
+        apps_text = ""
+        if apps:
+            status_emoji = {'PENDING': '⏳', 'ACCEPTED': '✅', 'REJECTED': '❌'}
+            for a in apps:
+                apps_text += f"• {a[0]}: {status_emoji.get(a[1], '')} {a[1]}\n"
+        else:
+            apps_text = "<i>Нет поданных заявок</i>" if lang == 'ru' else "<i>No applications found</i>"
+            
+        profile_msg = STRINGS[lang]['b_profile_text'].format(uid=m.chat.id, reg=u_data[0], warns=u_data[1], apps=apps_text)
+        return bot.send_message(m.chat.id, profile_msg)
 
     if m.text in [STRINGS['ru']['b_lang'], STRINGS['en']['b_lang']]:
         new_lang = 'en' if lang == 'ru' else 'ru'
@@ -349,7 +384,7 @@ def start_dynamic_form(uid, form_type, lang):
     bot.register_next_step_handler(msg, process_form_step)
 
 def process_form_step(m):
-    # СБРОС АНКЕТЫ ПРИ ВВОДЕ КОМАНДЫ (НАПР. /start ИЛИ /admin)
+    # СБРОС АНКЕТЫ ПРИ ВВОДЕ КОМАНДЫ
     if m.text and m.text.startswith('/'):
         db_query("UPDATE subjects SET state = 'IDLE' WHERE uid = ?", (m.chat.id,), commit=True)
         bot.send_message(m.chat.id, "❌ Заполнение анкеты отменено.", reply_markup=get_main_kb(m.chat.id))
@@ -406,6 +441,12 @@ def h_catch_all(m):
     res = db_query("SELECT lang, banned, state FROM subjects WHERE uid = ?", (m.chat.id,), fetch=True)
     if not res: return 
     u = res[0]
+    
+    # БЛОКИРОВКА ПРИ ТЕХ. РАБОТАХ ДЛЯ ОБЫЧНЫХ СООБЩЕНИЙ
+    if get_setting('maintenance') == '1' and m.chat.id not in OWNERS:
+        bot.send_message(m.chat.id, STRINGS[u[0]]['maintenance'])
+        return
+        
     if u[1]: return 
     if m.chat.id in OWNERS and u[2] == 'IDLE': return 
 
@@ -413,7 +454,6 @@ def h_catch_all(m):
     ts = datetime.now().strftime("%H:%M")
     txt_log = m.text if m.content_type == 'text' else f"[{m.content_type}]"
     
-    # Безопасный логинг в историю
     try:
         db_query("INSERT INTO history (uid, txt, ts, direction) VALUES (?, ?, ?, ?)", (m.chat.id, txt_log, ts, 'IN'), commit=True)
     except: pass
@@ -478,6 +518,13 @@ def h_callbacks(c):
             sync_notify_all(aid, f"⚙️ Изменил прием Тестировщиков на: <b>{'ВКЛ' if new_v=='1' else 'ВЫКЛ'}</b>")
             return bot.answer_callback_query(c.id, "Статус изменен")
 
+        if c.data == 'toggle_maint':
+            new_v = '0' if get_setting('maintenance') == '1' else '1'
+            set_setting('maintenance', new_v)
+            bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=get_admin_panel_kb())
+            sync_notify_all(aid, f"🛠 Режим тех. работ: <b>{'ВКЛЮЧЕН' if new_v=='1' else 'ВЫКЛЮЧЕН'}</b>")
+            return bot.answer_callback_query(c.id, "Статус изменен")
+
         if c.data == 'adm_builder':
             kb = types.InlineKeyboardMarkup(row_width=1)
             kb.add(
@@ -487,10 +534,11 @@ def h_callbacks(c):
             )
             return bot.send_message(c.message.chat.id, "⚙️ <b>КОНСТРУКТОР АНКЕТ DRAGPOLIT</b>\nВыберите форму для настройки:", reply_markup=kb)
 
-        # ЗАПУСК РАССЫЛКИ
-        if c.data == 'adm_broadcast':
-            msg = bot.send_message(c.message.chat.id, "📢 <b>ГЛОБАЛЬНАЯ РАССЫЛКА</b>\n\nОтправьте сообщение (текст, фото с описанием, видео, файл или стикер), которое нужно разослать всем пользователям:\n\n<i>(Напишите '.' для отмены)</i>")
-            return bot.register_next_step_handler(msg, step_broadcast)
+        # ЗАПУСК РАССЫЛКИ (УМНАЯ)
+        if c.data.startswith('adm_broadcast_'):
+            aud = "ВСЕМ ИГРОКАМ" if c.data == 'adm_broadcast_all' else "ТОЛЬКО ПРИНЯТЫМ ТЕСТЕРАМ"
+            msg = bot.send_message(c.message.chat.id, f"📢 <b>РАССЫЛКА: {aud}</b>\n\nОтправьте сообщение (текст, фото с описанием, видео, файл или стикер), которое нужно разослать:\n\n<i>(Напишите '.' для отмены)</i>")
+            return bot.register_next_step_handler(msg, step_broadcast, c.data)
 
         # ПРОСМОТР НЕРАССМОТРЕННЫХ ЗАЯВОК
         if c.data == 'adm_apps_list':
@@ -506,6 +554,26 @@ def h_callbacks(c):
         if c.data == 'adm_faq_add':
             msg = bot.send_message(c.message.chat.id, "➕ <b>ДОБАВЛЕНИЕ FAQ</b>\nВведите ВОПРОС (или напишите '.' для отмены):")
             return bot.register_next_step_handler(msg, step_faq_q)
+            
+        # ЭКСПОРТ ТЕСТЕРОВ
+        elif c.data == 'adm_export_testers':
+            apps = db_query("SELECT username, data_json FROM applications WHERE type = 'TESTER' AND status = 'ACCEPTED'", fetch=True)
+            if not apps: return bot.send_message(c.message.chat.id, "📂 Нет принятых тестировщиков.")
+            
+            content = "СПИСОК GOOGLE PLAY EMAIL АДРЕСОВ:\n----------------------------------------\n"
+            for a in apps:
+                try:
+                    email = json.loads(a[1])[0] 
+                    content += f"{email}\n"
+                except: pass
+                
+            file_path = f"/tmp/testers_export_{int(time.time())}.txt"
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+                
+            with open(file_path, "rb") as f:
+                bot.send_document(c.message.chat.id, f, caption="📥 <b>Список e-mail адресов для Google Play Console</b>")
+            return bot.answer_callback_query(c.id, "Файл сгенерирован")
 
         if p[0] == 'build' and p[1] == 'view':
             form_type = p[2]
@@ -574,7 +642,9 @@ def h_callbacks(c):
                 total_users = db_query("SELECT COUNT(*) FROM subjects", fetch=True)[0][0]
                 total_apps = db_query("SELECT COUNT(*) FROM applications", fetch=True)[0][0]
                 total_revs = db_query("SELECT COUNT(*) FROM reviews", fetch=True)[0][0]
-                res = f"📊 <b>СТАТИСТИКА DRAGPOLIT:</b>\n👥 Игроков: <b>{total_users}</b>\n📝 Заявок: <b>{total_apps}</b>\n⭐ Отзывов: <b>{total_revs}</b>"
+                total_testers = db_query("SELECT COUNT(DISTINCT uid) FROM applications WHERE type = 'TESTER' AND status = 'ACCEPTED'", fetch=True)[0][0]
+
+                res = f"📊 <b>СТАТИСТИКА DRAGPOLIT:</b>\n👥 Игроков: <b>{total_users}</b>\n🧪 Принятых тестеров: <b>{total_testers}</b>\n📝 Заявок всего: <b>{total_apps}</b>\n⭐ Отзывов: <b>{total_revs}</b>"
                 bot.send_message(c.message.chat.id, res)
             
             elif c.data == 'adm_reviews_list':
@@ -592,15 +662,21 @@ def h_callbacks(c):
 # ==========================================
 # 9. КРОКИ АДМИНИСТРАЦИИ И ПОЛЬЗОВАТЕЛЕЙ
 # ==========================================
-def step_broadcast(m):
+def step_broadcast(m, target_group):
     if m.text == '.':
         return bot.send_message(m.chat.id, "❌ Рассылка отменена.")
 
-    users = db_query("SELECT uid FROM subjects WHERE banned = 0", fetch=True)
-    if not users:
-        return bot.send_message(m.chat.id, "❌ Нет активных пользователей для рассылки.")
+    if target_group == 'adm_broadcast_test':
+        users = db_query("SELECT DISTINCT uid FROM applications WHERE type = 'TESTER' AND status = 'ACCEPTED'", fetch=True)
+        target_name = "Тестировщикам"
+    else:
+        users = db_query("SELECT uid FROM subjects WHERE banned = 0", fetch=True)
+        target_name = "Всем игрокам"
 
-    bot.send_message(m.chat.id, f"⏳ <b>Запуск рассылки...</b>\nПолучателей: {len(users)}")
+    if not users:
+        return bot.send_message(m.chat.id, "❌ Нет подходящих пользователей для этой рассылки.")
+
+    bot.send_message(m.chat.id, f"⏳ <b>Запуск рассылки ({target_name})...</b>\nПолучателей: {len(users)}")
 
     succeeded = 0
     failed = 0
@@ -610,18 +686,19 @@ def step_broadcast(m):
         try:
             bot.copy_message(chat_id=uid, from_chat_id=m.chat.id, message_id=m.message_id)
             succeeded += 1
-            time.sleep(0.04) # Антифлуд задержка Telegram (25 сообщений в сек)
+            time.sleep(0.04) 
         except Exception:
             failed += 1
 
     res_text = (f"📢 <b>РАССЫЛКА ЗАВЕРШЕНА!</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Аудитория: <b>{target_name}</b>\n"
                 f"✅ Успешно доставлено: <b>{succeeded}</b>\n"
-                f"❌ Ошибок / Заблокировали: <b>{failed}</b>\n"
-                f"👥 Всего в базе: <b>{len(users)}</b>")
+                f"❌ Ошибок / Заблокировали бота: <b>{failed}</b>\n"
+                f"👥 Всего в выборке: <b>{len(users)}</b>")
 
     bot.send_message(m.chat.id, res_text)
-    sync_notify_all(m.from_user.id, f"📢 Провел рассылку.\nДоставлено: {succeeded} | Ошибок: {failed}")
+    sync_notify_all(m.from_user.id, f"📢 Провел рассылку ({target_name}).\nДоставлено: {succeeded} | Ошибок: {failed}")
 
 def step_faq_q(m):
     if m.text == '.': return bot.send_message(m.chat.id, "❌ Отменено.")
@@ -663,7 +740,6 @@ def step_add_question(m, form_type):
     sync_notify_all(m.from_user.id, f"➕ Добавил вопрос в анкету {form_type}: <i>{m.text}</i>")
     bot.send_message(m.chat.id, f"✅ Вопрос успешно добавлен под номером <b>#{count + 1}</b>!")
 
-# АВАРИЙНО-ЗАЩИЩЕННАЯ ОТПРАВКА ОТВЕТА ПОЛЬЗОВАТЕЛЮ
 def step_send_ans(m, uid):
     res_user = db_query("SELECT lang FROM subjects WHERE uid = ?", (uid,), fetch=True)
     u_lang = res_user[0][0] if res_user else 'ru'
@@ -672,14 +748,12 @@ def step_send_ans(m, uid):
     try:
         content = m.text if m.content_type == 'text' else f"[{m.content_type}]"
         
-        # 1. Отправляем ответ пользователю
         if m.content_type == 'text':
             bot.send_message(uid, STRINGS[u_lang]['reply_head'] + f"<i>{m.text}</i>")
         else:
             bot.send_message(uid, STRINGS[u_lang]['reply_head'])
             bot.copy_message(uid, m.chat.id, m.message_id)
         
-        # 2. Безопасно сохраняем историю (с обработкой старых баз)
         try:
             db_query("INSERT INTO history (uid, txt, ts, direction, admin_id) VALUES (?, ?, ?, ?, ?)", 
                      (uid, content, "NOW", "OUT", aid), commit=True)
@@ -706,7 +780,7 @@ if __name__ == '__main__':
         types.BotCommand("start", "Главная страница"),
         types.BotCommand("admin", "Терминал управления")
     ])
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V13 STABLE SYSTEM ONLINE.")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] DRAGPOLIT V14 ENTERPRISE ONLINE.")
     
     while True:
         try:
